@@ -1,7 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 import feedparser
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import re
 
 # --- 1. 디시인사이드 갤러리 크롤링 ---
@@ -39,7 +39,6 @@ def get_dc_best_posts():
 def get_latest_news():
     rss_url = "https://news.google.com/rss/search?q=백종원+OR+더본코리아+when:1d&hl=ko&gl=KR&ceid=KR:ko"
     try:
-        # 봇 차단기를 피하기 위해 requests로 브라우저 위장 접근
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         res = requests.get(rss_url, headers=headers, timeout=10)
         feed = feedparser.parse(res.content)
@@ -80,7 +79,7 @@ def get_stock_info(ticker_code="475560"):
     except Exception as e:
         return {'price': '오류', 'change_str': '-', 'chart_url': ''}
 
-# --- 4. 유튜브 RSS (접근 권한 403 차단 완벽 우회) ---
+# --- 4. 유튜브 RSS ---
 youtube_channels = {
     "백종원 본채널": ("https://www.youtube.com/@paik_jongwon", "UCyn-K7rZLXjGl7VXGweIlcA"),
     "김재환의 오재나": ("https://www.youtube.com/@studio_OZN", ""),
@@ -93,7 +92,6 @@ def get_channel_id(handle_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         res = requests.get(handle_url, headers=headers, timeout=10)
-        # 여러 패턴의 태그를 동원해 ID 강제 추출
         patterns = [r'"channelId":"(UC[\w-]{22})"', r'https://www.youtube.com/channel/(UC[\w-]{22})', r'channel_id=(UC[\w-]{22})']
         for p in patterns:
             match = re.search(p, res.text)
@@ -111,7 +109,6 @@ def get_youtube_updates():
             
         rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         try:
-            # 유튜브 봇 차단을 우회하기 위해 requests로 먼저 읽어오기
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             res = requests.get(rss_url, headers=headers, timeout=10)
             feed = feedparser.parse(res.content)
@@ -134,7 +131,6 @@ def get_youtube_updates():
                 
                 videos.append({'title': title, 'link': link, 'thumb': thumb, 'date': date, 'views': views})
             
-            # 목록이 비어있다면 오류 메시지 삽입
             if not videos:
                 results[name] = [{'title': '업로드된 영상이 없거나 서버에서 일시 차단되었습니다.', 'link': '#', 'thumb': '', 'date': '', 'views': ''}]
             else:
@@ -151,7 +147,9 @@ def generate_html_dashboard():
     stock = get_stock_info()
     youtube_data = get_youtube_updates()
     
-    current_time = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
+    # 한국 표준시(KST)로 명확하게 9시간 더해서 계산하도록 강제 지정
+    kst = timezone(timedelta(hours=9))
+    current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H:%M:%S")
     
     dc_html = ""
     for p in dc_posts:
@@ -264,7 +262,7 @@ def generate_html_dashboard():
     
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html)
-    print("\n✅ 유튜브 차단 회피 로직 패치 완료! 브라우저를 새로고침 해보세요.")
+    print("\n✅ 한국 표준시(KST) 업데이트 패치 완료! 저장소에 덮어씌워 보세요.")
 
 if __name__ == "__main__":
     generate_html_dashboard()
