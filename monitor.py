@@ -266,3 +266,4 @@ def generate_html_dashboard():
 
 if __name__ == "__main__":
     generate_html_dashboard()
+
