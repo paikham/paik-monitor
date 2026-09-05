@@ -1,0 +1,31 @@
+name: Auto Update Dashboard
+
+on:
+  schedule:
+    - cron: '0 * * * *' # 매 1시간 정각마다 실행
+  workflow_dispatch: # 수동 실행 버튼 추가
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      - name: Run Python script
+        run: python monitor.py
+        
+      - name: Commit and Push HTML
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add theborn_dashboard.html
+          git commit -m "자동 업데이트 완료" || exit 0
+          git push
