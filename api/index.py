@@ -224,7 +224,7 @@ def generate_html_string():
                 <img src="https://paikdabang.com/wp-content/themes/paikdabang/assets/images/logo.png" alt="빽다방">
                 <img src="https://start.theborn.co.kr/images/brand/hongkong/common/logo.png" alt="홍콩반점">
             </div>
-            <h1>더본코리아 빽모니터링 (Vercel 실시간 송출)</h1>
+            <h1>더본코리아 빽모니터링</h1>
             <div class="update-time">마지막 업데이트: {current_time} (접속 즉시 최신화)</div>
         </div>
         
