@@ -14,7 +14,7 @@ COMMON_HEADERS = {
 }
 
 def decode_html(res):
-    """네이버 금융 등의 UTF-8 / CP949(EUC-KR) 인코딩 충돌을 자동으로 해결합니다."""
+    """UTF-8 우선 디코딩 후 실패 시 CP949(EUC-KR)로 안전하게 디코딩합니다."""
     try:
         return res.content.decode('utf-8')
     except UnicodeDecodeError:
@@ -52,91 +52,95 @@ def get_dc_best_posts():
     except Exception as e:
         return [{'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
 
-# --- 2. 네이버 종목토론방 (JSON 트리 탐색 + PC/메인 다중 파싱) ---
+# --- 2. 네이버 종목토론방 (PC/모바일 다중 파싱 및 예외 격리) ---
 def get_naver_jongtobang(ticker_code="475560"):
     results = []
-    
-    # 1순위: 네이버 모바일 증권 공식 JSON API
-    m_url = f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?size=20"
-    m_headers = {
+
+    # 1순위: PC 네이버 금융 종목토론실 (정확한 자기 자신 Referer + td.title a 선택자)
+    board_url = f"https://finance.naver.com/item/board.naver?code={ticker_code}&page=1"
+    pc_headers = {
         **COMMON_HEADERS,
-        'Referer': f'https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss',
-        'Accept': 'application/json, text/plain, */*'
+        'Referer': f"https://finance.naver.com/item/board.naver?code={ticker_code}"
     }
     try:
-        res = requests.get(m_url, headers=m_headers, timeout=4)
-        if res.status_code == 200:
-            data = res.json()
-            found_items = []
-            def find_posts(obj):
-                if isinstance(obj, dict):
-                    if ('title' in obj or 'subject' in obj) and ('date' in obj or 'writtenAt' in obj or 'readCount' in obj or 'discussionId' in obj):
-                        found_items.append(obj)
-                    else:
-                        for v in obj.values():
-                            find_posts(v)
-                elif isinstance(obj, list):
-                    for item in obj:
-                        find_posts(item)
-            find_posts(data)
-
-            for item in found_items[:20]:
-                title = (item.get('title') or item.get('subject') or '').strip()
+        res = requests.get(board_url, headers=pc_headers, timeout=4.5)
+        soup = BeautifulSoup(decode_html(res), 'html.parser')
+        for row in soup.select('table.type2 tr'):
+            try:
+                title_el = row.select_one('td.title a')
+                if not title_el:
+                    continue
+                title = (title_el.get('title') or title_el.text or '').strip()
                 if not title:
                     continue
-                nid = item.get('discussionId') or item.get('nid') or item.get('articleId') or ''
-                link = f"https://finance.naver.com/item/board_read.naver?code={ticker_code}&nid={nid}" if nid else f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss"
-                date_raw = str(item.get('date') or item.get('writtenAt') or '')
-                date = date_raw[5:16].replace('-', '.') if len(date_raw) >= 16 else date_raw[:10]
-                views = f"{int(item.get('readCount') or item.get('viewCount') or 0):,}"
-                good = str(item.get('goodCount') or item.get('sympathyCount') or 0)
-                bad = str(item.get('badCount') or item.get('antipathyCount') or 0)
-                cmt_cnt = item.get('commentCount') or 0
-                comments = f"[{cmt_cnt}]" if cmt_cnt else ""
-                results.append({
-                    'title': title, 'link': link, 'comments': comments,
-                    'date': date, 'views': views, 'good': good, 'bad': bad
-                })
-            if results:
-                return results
-    except Exception:
-        pass
-
-    # 2순위: 네이버 금융 PC 종목토론실 & 종목 메인 페이지 파싱 (UTF-8/CP949 자동 호환)
-    for page_url in [
-        f"https://finance.naver.com/item/board.naver?code={ticker_code}",
-        f"https://finance.naver.com/item/main.naver?code={ticker_code}"
-    ]:
-        try:
-            res = requests.get(page_url, headers={**COMMON_HEADERS, 'Referer': 'https://finance.naver.com/'}, timeout=4)
-            soup = BeautifulSoup(decode_html(res), 'html.parser')
-            for a_el in soup.select('a[href*="board_read.naver"]'):
-                title = (a_el.get('title') or a_el.text or '').strip()
-                if not title:
-                    continue
-                href = a_el.get('href', '')
+                href = title_el.get('href', '')
                 link = "https://finance.naver.com" + href if href.startswith('/') else href
-                row = a_el.find_parent('tr')
-                if row:
-                    cmt_el = row.select_one('span.tah')
-                    comments = cmt_el.text.strip() if cmt_el and '[' in cmt_el.text else ""
-                    tds = row.select('td')
-                    date = tds[0].text.strip() if len(tds) > 0 else '-'
-                    views = tds[3].text.strip() if len(tds) > 3 else '-'
-                    good = tds[4].text.strip() if len(tds) > 4 else '0'
-                    bad = tds[5].text.strip() if len(tds) > 5 else '0'
-                else:
-                    comments, date, views, good, bad = "", "최신", "-", "-", "-"
+                
+                cmt_el = row.select_one('td.title span.tah')
+                comments = cmt_el.text.strip() if cmt_el else ""
+                
+                tds = row.select('td')
+                date = tds[0].text.strip() if len(tds) > 0 else '-'
+                views = tds[3].text.strip() if len(tds) > 3 else '-'
+                good = tds[4].text.strip() if len(tds) > 4 else '0'
+                bad = tds[5].text.strip() if len(tds) > 5 else '0'
+                
                 results.append({
                     'title': title, 'link': link, 'comments': comments,
                     'date': date, 'views': views, 'good': good, 'bad': bad
                 })
                 if len(results) >= 20:
                     break
+            except Exception:
+                continue
+        if results:
+            return results
+    except Exception:
+        pass
+
+    # 2순위: 모바일 증권 공식 JSON API (필수 파라미터 rsno=0&filter= 포함 및 개별 예외 처리)
+    m_url = f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?rsno=0&size=20&filter="
+    m_headers = {
+        **COMMON_HEADERS,
+        'Referer': f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss",
+        'Accept': 'application/json, text/plain, */*'
+    }
+    try:
+        res = requests.get(m_url, headers=m_headers, timeout=4.5)
+        if res.status_code == 200:
+            data = res.json()
+            items = data if isinstance(data, list) else (data.get('result') or data.get('items') or data.get('datas') or [])
+            if isinstance(items, dict):
+                items = items.get('list') or items.get('items') or []
+            for item in items:
+                try:
+                    if not isinstance(item, dict):
+                        continue
+                    title = str(item.get('title') or item.get('subject') or '').strip()
+                    if not title:
+                        continue
+                    nid = item.get('discussionId') or item.get('nid') or item.get('articleId') or ''
+                    link = f"https://finance.naver.com/item/board_read.naver?code={ticker_code}&nid={nid}" if nid else f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss"
+                    date_raw = str(item.get('date') or item.get('writtenAt') or '')
+                    date = date_raw[5:16].replace('-', '.') if len(date_raw) >= 16 else date_raw[:10]
+                    rc = item.get('readCount') or item.get('viewCount') or 0
+                    views = f"{int(rc):,}" if str(rc).isdigit() else str(rc)
+                    good = str(item.get('goodCount') or item.get('sympathyCount') or 0)
+                    bad = str(item.get('badCount') or item.get('antipathyCount') or 0)
+                    cmt_cnt = item.get('commentCount') or 0
+                    comments = f"[{cmt_cnt}]" if cmt_cnt else ""
+                    results.append({
+                        'title': title, 'link': link, 'comments': comments,
+                        'date': date, 'views': views, 'good': good, 'bad': bad
+                    })
+                    if len(results) >= 20:
+                        break
+                except Exception:
+                    continue
             if results:
                 return results
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     return [{'title': '종토방 실시간 글 보러가기 (클릭)', 'link': f'https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss', 'comments': '', 'date': '실시간', 'views': '-', 'good': '-', 'bad': '-'}]
 
@@ -284,94 +288,93 @@ def get_stock_and_disclosures(ticker_code="475560"):
     except Exception:
         pass
 
+    # 전자공시: table.type5 td.title a 선택자 + UTF-8 디코딩 조합으로 정확히 파싱
     disclosures = []
-    for n_url in [
-        f"https://finance.naver.com/item/news_notice.naver?code={ticker_code}",
-        f"https://finance.naver.com/item/main.naver?code={ticker_code}"
-    ]:
-        try:
-            n_res = requests.get(n_url, headers=COMMON_HEADERS, timeout=4)
-            n_soup = BeautifulSoup(decode_html(n_res), 'html.parser')
-            for a_el in n_soup.select('a[href*="notice_read.naver"]'):
-                d_title = a_el.text.strip()
-                if not d_title:
-                    continue
-                href = a_el.get('href', '')
-                d_link = "https://finance.naver.com" + href if href.startswith('/') else href
-                parent = a_el.find_parent('tr') or a_el.find_parent('li')
-                tds = parent.select('td') if parent else []
-                d_info = tds[1].text.strip() if len(tds) > 1 else '공시'
-                d_date = tds[2].text.strip() if len(tds) > 2 else ''
-                disclosures.append({'title': d_title, 'link': d_link, 'info': d_info, 'date': d_date})
-                if len(disclosures) >= 5:
-                    break
-            if disclosures:
+    try:
+        notice_url = f"https://finance.naver.com/item/news_notice.naver?code={ticker_code}&page=1"
+        n_headers = {**COMMON_HEADERS, 'Referer': f"https://finance.naver.com/item/news.naver?code={ticker_code}"}
+        n_res = requests.get(notice_url, headers=n_headers, timeout=4)
+        n_soup = BeautifulSoup(decode_html(n_res), 'html.parser')
+        for r in n_soup.select('table.type5 tr'):
+            a_el = r.select_one('td.title a')
+            if not a_el:
+                continue
+            d_title = a_el.text.strip()
+            if not d_title:
+                continue
+            href = a_el.get('href', '')
+            d_link = "https://finance.naver.com" + href if href.startswith('/') else href
+            tds = r.select('td')
+            d_info = tds[1].text.strip() if len(tds) > 1 else '공시'
+            d_date = tds[2].text.strip() if len(tds) > 2 else ''
+            disclosures.append({'title': d_title, 'link': d_link, 'info': d_info, 'date': d_date})
+            if len(disclosures) >= 5:
                 break
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 5. 유튜브 InnerTube API (병렬 고속 수집 + 스냅샷 백업) ---
+# --- 5. 유튜브: 일반 검색(Search) 전면 배제 & 채널 고유 업로드 재생목록(VLUU) 100% 최신순 수집 ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
         "handle": "https://www.youtube.com/@studio_OZN",
-        "id": "", "search_query": "김재환의 오재나 백종원",
+        "id": "", "sample_vid": "0Gsvn_I6z1w",
         "fallback": [
-            {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "2026-10-21", "views": "583,007"},
-            {"vid": "4fALTQTUldU", "title": "연돈볼카츠 합의안 타결! 나머지 점주들은 신났을까? #백종원 #김재환 #더본코리아", "date": "2026-10-05", "views": "1,462,077"},
-            {"vid": "X-RHoJtJz3Q", "title": "홍콩반점 점주들은 소송이 장난인가? #오재나 #김재환PD #백종원 #더본코리아", "date": "2026-09-16", "views": "708,169"}
+            {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "2026-10-21", "views": "583,154회"},
+            {"vid": "4fALTQTUldU", "title": "연돈볼카츠 합의안 타결! 나머지 점주들은 신났을까? #백종원 #김재환 #더본코리아", "date": "2026-10-05", "views": "1,462,077회"},
+            {"vid": "X-RHoJtJz3Q", "title": "홍콩반점 점주들은 소송이 장난인가? #오재나 #김재환PD #백종원 #더본코리아", "date": "2026-09-16", "views": "708,169회"}
         ]
     },
     {
         "name": "탐코 : 탐욕의 코리아", "group": "CRITIC",
         "handle": "https://www.youtube.com/channel/UC1rn5BnUdP1OGI6vnxh0IbQ",
-        "id": "UC1rn5BnUdP1OGI6vnxh0IbQ", "search_query": "탐코 : 탐욕의 코리아 백종원",
+        "id": "UC1rn5BnUdP1OGI6vnxh0IbQ", "sample_vid": "DQ3qTgVC9os",
         "fallback": [
-            {"vid": "DQ3qTgVC9os", "title": "백종원 운명을 결정할 소송", "date": "2026-10-24", "views": "234,087"},
-            {"vid": "NryKk-8AvPY", "title": "더본코리아를 공정위에 고발합니다", "date": "2026-10-23", "views": "227,784"},
-            {"vid": "3jU0OGvghkA", "title": "백종원과 위생", "date": "2026-10-17", "views": "306,957"}
+            {"vid": "DQ3qTgVC9os", "title": "백종원 운명을 결정할 소송", "date": "2026-10-24", "views": "234,087회"},
+            {"vid": "NryKk-8AvPY", "title": "더본코리아를 공정위에 고발합니다", "date": "2026-10-23", "views": "227,784회"},
+            {"vid": "3jU0OGvghkA", "title": "백종원과 위생", "date": "2026-10-17", "views": "306,959회"}
         ]
     },
     {
         "name": "백종원 본채널", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@paik_jongwon",
-        "id": "UCyn-K7rZLXjGl7VXGweIlcA", "search_query": "백종원 PAIK JONG WON",
+        "id": "UCyn-K7rZLXjGl7VXGweIlcA", "sample_vid": "pON-SAEgYUY",
         "fallback": [
-            {"vid": "pON-SAEgYUY", "title": "[출장 중 배고파_청두] \"짜장면에 춘장이 안 들어간다고?\" 청두 올 때마다 무조건 찾는 영혼의 비빔면!", "date": "2026-10-21", "views": "332,751"},
-            {"vid": "bFX5lJgCPBQ", "title": "쌀쌀한 가을에 당면만둣국 한 그릇", "date": "2026-10-20", "views": "426,194"},
-            {"vid": "w53qGlJ1vLI", "title": "막창을 튀겨서 짬뽕에 넣었습니다!", "date": "2026-10-08", "views": "870,363"}
+            {"vid": "pON-SAEgYUY", "title": "[출장 중 배고파_청두] \"짜장면에 춘장이 안 들어간다고?\" 청두 올 때마다 무조건 찾는 영혼의 비빔면!", "date": "2026-10-21", "views": "448,386회"},
+            {"vid": "bFX5lJgCPBQ", "title": "쌀쌀한 가을에 당면만둣국 한 그릇", "date": "2026-10-20", "views": "426,194회"},
+            {"vid": "w53qGlJ1vLI", "title": "막창을 튀겨서 짬뽕에 넣었습니다!", "date": "2026-10-08", "views": "870,363회"}
         ]
     },
     {
         "name": "TBK (글로벌소스)", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@TBK_theborn",
-        "id": "UCbgdcVitzVvWdngVx3OYTmA", "search_query": "TBK Mild Paik Ramyun",
+        "id": "UCbgdcVitzVvWdngVx3OYTmA", "sample_vid": "FfC_pNkyaT8",
         "fallback": [
-            {"vid": "FfC_pNkyaT8", "title": "Kimchi Egg Ramyun With Mild Paik Ramyun", "date": "2026-10-13", "views": "1,711"},
-            {"vid": "-wHsjUnhoL4", "title": "Dumpling Ramyun with Mild Paik Ramyun", "date": "2026-10-13", "views": "356"},
-            {"vid": "fCRzCl-gqOg", "title": "Mala Ramyun With Mild Paik Ramyun", "date": "2026-10-13", "views": "1,247"}
+            {"vid": "FfC_pNkyaT8", "title": "Kimchi Egg Ramyun With Mild Paik Ramyun", "date": "2026-10-13", "views": "1,711회"},
+            {"vid": "-wHsjUnhoL4", "title": "Dumpling Ramyun with Mild Paik Ramyun", "date": "2026-10-13", "views": "356회"},
+            {"vid": "fCRzCl-gqOg", "title": "Mala Ramyun With Mild Paik Ramyun", "date": "2026-10-13", "views": "1,247회"}
         ]
     },
     {
         "name": "더본 테이스티", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_tasty",
-        "id": "", "search_query": "더본 테이스티",
+        "id": "", "sample_vid": "gazC1wTYt3k",
         "fallback": [
-            {"vid": "gazC1wTYt3k", "title": "침샘 폭발 주의! 대구의 맛, 막창짬뽕 화보 영상 🎬", "date": "2026-10-19", "views": "111,744"},
-            {"vid": "GdNx1GQAG_A", "title": "찾았다! 연돈튀김덮밥 할인 소식🫶", "date": "2026-09-29", "views": "27,791"},
-            {"vid": "7Om-LNDRQgw", "title": "연돈튀김덮밥 도시락 속 들리는 소리는?!", "date": "2026-09-28", "views": "306"}
+            {"vid": "gazC1wTYt3k", "title": "침샘 폭발 주의! 대구의 맛, 막창짬뽕 화보 영상 🎬", "date": "2026-10-19", "views": "111,744회"},
+            {"vid": "GdNx1GQAG_A", "title": "찾았다! 연돈튀김덮밥 할인 소식🫶", "date": "2026-09-29", "views": "27,791회"},
+            {"vid": "7Om-LNDRQgw", "title": "연돈튀김덮밥 도시락 속 들리는 소리는?!", "date": "2026-09-28", "views": "306회"}
         ]
     },
     {
         "name": "더본 NOW", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_now",
-        "id": "", "search_query": "더본NOW 산토끼밥상",
+        "id": "", "sample_vid": "nY3ibLP2xbo",
         "fallback": [
-            {"vid": "nY3ibLP2xbo", "title": "바비큐부터 아이스크림까지 무료?!🔥 창녕 산토끼밥상의 특별한 여름", "date": "2026-10-06", "views": "579"},
-            {"vid": "tGLX12qPsyg", "title": "어디든 달려갑니다! 더본 푸드트럭 삼총사 전격 해부 🔍", "date": "2026-07-02", "views": "1,299"}
+            {"vid": "nY3ibLP2xbo", "title": "바비큐부터 아이스크림까지 무료?!🔥 창녕 산토끼밥상의 특별한 여름", "date": "2026-10-06", "views": "579회"},
+            {"vid": "tGLX12qPsyg", "title": "어디든 달려갑니다! 더본 푸드트럭 삼총사 전격 해부 🔍", "date": "2026-07-02", "views": "1,299회"}
         ]
     }
 ]
@@ -380,28 +383,100 @@ INNERTUBE_CONTEXT = {
     "client": {"hl": "ko", "gl": "KR", "clientName": "WEB", "clientVersion": "2.20251020.01.00"}
 }
 
-def extract_videos_from_innertube_json(data, max_count=3):
+def format_view_text(v_str):
+    v_str = v_str.replace('조회수', '').strip()
+    if not v_str:
+        return '집계중'
+    if not v_str.endswith('회') and not v_str.endswith('중'):
+        return v_str + '회'
+    return v_str
+
+def resolve_exact_channel_id(ch):
+    """핸들 URL 또는 샘플 영상 ID로부터 해당 채널의 정확한 UC... ID를 추출합니다."""
+    if ch.get('id'):
+        return ch['id']
+
+    # 1차: InnerTube navigation/resolve_url 로 @핸들에서 정확한 browseId(UC...) 획득
+    try:
+        r_url = "https://www.youtube.com/youtubei/v1/navigation/resolve_url?prettyPrint=false"
+        payload = {"context": INNERTUBE_CONTEXT, "url": ch['handle']}
+        res = requests.post(r_url, json=payload, headers=COMMON_HEADERS, timeout=3)
+        if res.status_code == 200:
+            cid = res.json().get('endpoint', {}).get('browseEndpoint', {}).get('browseId', '')
+            if cid.startswith('UC'):
+                ch['id'] = cid
+                return cid
+    except Exception:
+        pass
+
+    # 2차: 샘플 영상 ID로 Player API 조회하여 정확한 channelId(UC...) 획득
+    if ch.get('sample_vid'):
+        try:
+            p_url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+            payload = {
+                "context": {"client": {"hl": "ko", "gl": "KR", "clientName": "WEB", "clientVersion": "2.20251020.01.00"}},
+                "videoId": ch['sample_vid']
+            }
+            res = requests.post(p_url, json=payload, headers=COMMON_HEADERS, timeout=3)
+            if res.status_code == 200:
+                cid = res.json().get('videoDetails', {}).get('channelId', '')
+                if cid.startswith('UC'):
+                    ch['id'] = cid
+                    return cid
+        except Exception:
+            pass
+
+    return ""
+
+def parse_playlist_and_video_renderers(data, max_count=3):
+    """VLUU... 업로드 플레이리스트(playlistVideoRenderer) 및 동영상 탭에서 최신 영상 3개를 추출합니다."""
     videos = []
     seen_vids = set()
+
     def walk(obj):
         if len(videos) >= max_count:
             return
         if isinstance(obj, dict):
-            if 'videoRenderer' in obj:
-                vr = obj['videoRenderer']
-                vid = vr.get('videoId', '')
+            # 1순위: VLUU... 업로드 재생목록 아이템 (쇼츠+일반영상 모두 최신순 정렬됨)
+            if 'playlistVideoRenderer' in obj:
+                pvr = obj['playlistVideoRenderer']
+                vid = pvr.get('videoId', '')
                 if vid and vid not in seen_vids:
-                    title_runs = vr.get('title', {}).get('runs', [])
-                    title = title_runs[0].get('text', '') if title_runs else vr.get('title', {}).get('simpleText', '')
-                    pub = vr.get('publishedTimeText', {}).get('simpleText', '최신')
-                    views = vr.get('viewCountText', {}).get('simpleText', '')
-                    if not views:
-                        runs = vr.get('viewCountText', {}).get('runs', [])
-                        views = "".join(r.get('text', '') for r in runs)
-                    views = views.replace('조회수 ', '').replace('회', '').strip() or '집계중'
+                    t_runs = pvr.get('title', {}).get('runs', [])
+                    title = t_runs[0].get('text', '') if t_runs else pvr.get('title', {}).get('simpleText', '')
+                    info_runs = [r.get('text', '') for r in pvr.get('videoInfo', {}).get('runs', [])]
+                    views, pub = '집계중', '최신'
+                    for ir in info_runs:
+                        if '조회수' in ir or '회' in ir or '천' in ir or '만' in ir:
+                            views = format_view_text(ir)
+                        elif '전' in ir or '방금' in ir or '오늘' in ir:
+                            pub = ir.strip()
                     if title:
                         seen_vids.add(vid)
                         videos.append({
+                            'vid': vid,
+                            'title': title,
+                            'link': f"https://www.youtube.com/watch?v={vid}",
+                            'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+                            'date': pub,
+                            'views': views
+                        })
+            # 2순위: 일반 videoRenderer
+            elif 'videoRenderer' in obj:
+                vr = obj['videoRenderer']
+                vid = vr.get('videoId', '')
+                if vid and vid not in seen_vids:
+                    t_runs = vr.get('title', {}).get('runs', [])
+                    title = t_runs[0].get('text', '') if t_runs else vr.get('title', {}).get('simpleText', '')
+                    pub = vr.get('publishedTimeText', {}).get('simpleText', '최신')
+                    v_raw = vr.get('viewCountText', {}).get('simpleText', '')
+                    if not v_raw:
+                        v_raw = "".join(r.get('text', '') for r in vr.get('viewCountText', {}).get('runs', []))
+                    views = format_view_text(v_raw)
+                    if title:
+                        seen_vids.add(vid)
+                        videos.append({
+                            'vid': vid,
                             'title': title,
                             'link': f"https://www.youtube.com/watch?v={vid}",
                             'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
@@ -414,31 +489,37 @@ def extract_videos_from_innertube_json(data, max_count=3):
         elif isinstance(obj, list):
             for item in obj:
                 walk(item)
+
     walk(data)
     return videos
 
 def fetch_single_channel(ch):
+    cid = resolve_exact_channel_id(ch)
     vids = []
-    if ch.get('id'):
+    b_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
+
+    if cid.startswith('UC'):
+        # 핵심: UC... 를 VLUU... 로 바꾸면 해당 채널의 '전체 최신 업로드 플레이리스트(쇼츠 포함)'를 100% 최신순으로 반환함
+        uploads_playlist_id = "VLUU" + cid[2:]
         try:
-            b_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
-            payload = {"context": INNERTUBE_CONTEXT, "browseId": ch['id'], "params": "EgZ2aWRlb3PyBgQKAjoA"}
+            payload = {"context": INNERTUBE_CONTEXT, "browseId": uploads_playlist_id}
             res = requests.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
             if res.status_code == 200:
-                vids = extract_videos_from_innertube_json(res.json(), 3)
+                vids = parse_playlist_and_video_renderers(res.json(), 3)
         except Exception:
             pass
 
-    if not vids and ch.get('search_query'):
-        try:
-            s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
-            payload = {"context": INNERTUBE_CONTEXT, "query": ch['search_query'], "params": "CAI%253D"}
-            res = requests.post(s_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
-            if res.status_code == 200:
-                vids = extract_videos_from_innertube_json(res.json(), 3)
-        except Exception:
-            pass
+        # 만약 플레이리스트가 비어있다면 채널 Videos 탭 조회
+        if not vids:
+            try:
+                payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZ2aWRlb3PyBgQKAjoA"}
+                res = requests.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
+                if res.status_code == 200:
+                    vids = parse_playlist_and_video_renderers(res.json(), 3)
+            except Exception:
+                pass
 
+    # 최후 폴백: 타 채널이 섞이는 일반 검색(search) 대신 검증된 채널 전용 최신 영상 스냅샷 사용
     if not vids:
         for item in ch.get('fallback', []):
             vid = item['vid']
@@ -457,47 +538,77 @@ def fetch_single_channel(ch):
         'videos': vids
     }
 
-# --- 6. 자연어 어간 분석 기반 실시간 공통 키워드 추출기 (수동 단어장 없음) ---
+# --- 6. 자연어 명사 어간 추출기 (서술어/동사/형용사/단순수식어 완벽 배제) ---
 IGNORE_WORDS = {
     '백종원', '백종원이', '백종원의', '백종원씨', '더본', '더본코리아', '대표', '대표님', '갤주',
     '진짜', '이거', '근황', '지금', '오늘', '오늘자', '최근', '현재', '그냥', '너무', '존나',
     '새끼', '씨발', '시발', '병신', '싯팔새끼', '이새끼', '사람', '솔직히', '진지하게', '경고',
     '속보', '다시보는', '명작', '이유', '한계', '명확한', '도와준', '비교', '진행상황', '유튭',
-    '댓글', '민심', '왜이럼', '생각', '이렇게', '모습', '보이는', '하는', '있는', '없는', '같음'
+    '댓글', '민심', '왜이럼', '생각', '이렇게', '모습', '보이는', '하는', '있는', '없는', '같음',
+    '있다', '없다', '되다', '하다', '이다', '같다', '보다', '오다', '가다', '주다', '알다', '모르다',
+    '얘기', '정도', '때문', '부분', '문제', '사실', '현황', '진격', '출점', '학인된', '어제', '내일'
 }
+
+# 동사/형용사 서술형 어미 패턴 ('~다', '~냐', '~노', '~네', '~음', '~거임', '~건가', '~할까' 등 차단)
+PREDICATE_PATTERN = re.compile(
+    r'(있다|없다|같다|되다|하다|이다|봤다|왔다|갔다|했다|됐다|난다|준다|본다|한다|된다|이다|'
+    r'겠냐|겠노|겠네|하노|하냐|하나|할까|볼까|하자|해라|마라|거임|건가|인듯|인가|구만|구나|던데|는데|길래|잖아|더라)$'
+)
 
 JOSA_PATTERN = re.compile(
     r'(에서부터|으로부터|에서|으로|이랑|하고|부터|까지|마저|조차|에게|한테|처럼|보다|라고|이라|다는|라는|은|는|이|가|을|를|의|에|로|과|와|도|만|한|할|함|임)$'
 )
 
-def normalize_korean_word(w):
+def normalize_korean_noun(w):
     w = re.sub(r'[ㄱ-ㅎㅏ-ㅣ]+', '', w)
     if len(w) < 2 or w.isdigit():
+        return ''
+    # 서술어(동사/형용사) 어미로 끝나는 단어 즉시 배제
+    if PREDICATE_PATTERN.search(w):
         return ''
     stemmed = JOSA_PATTERN.sub('', w)
     if len(stemmed) >= 2:
         w = stemmed
+    if PREDICATE_PATTERN.search(w) or w in IGNORE_WORDS:
+        return ''
+    # 3글자 이상 지명/매장명 접미사 정규화 (예: 예산군 -> 예산)
+    if len(w) >= 3 and w.endswith(('군', '시', '점')) and not w.endswith(('장군', '교시', '폐점', '출점', '지점', '반점')):
+        w = w[:-1]
     return w
 
-def extract_hot_keywords(dc_posts, jongto_posts):
+def extract_hot_keywords(dc_posts, jongto_posts, news_list):
     raw_tokens = []
+
+    # 1. 골갤 개념글 제목
     for p in dc_posts:
         words = re.findall(r'[가-힣A-Za-z0-9]{2,}', p['title'])
         post_stems = set()
         for w in words:
-            norm = normalize_korean_word(w)
-            if len(norm) >= 2 and norm not in IGNORE_WORDS and not re.match(r'^\d+[월일편명개년]$', norm):
+            norm = normalize_korean_noun(w)
+            if len(norm) >= 2 and norm not in IGNORE_WORDS and not re.match(r'^\d+[월일편명개년배위]$', norm):
                 post_stems.add(norm)
         raw_tokens.extend(post_stems)
 
+    # 2. 종토방 제목
     for j in jongto_posts:
         if '보러가기' in j['title'] or '실패' in j['title']:
             continue
         words = re.findall(r'[가-힣A-Za-z0-9]{2,}', j['title'])
         post_stems = set()
         for w in words:
-            norm = normalize_korean_word(w)
+            norm = normalize_korean_noun(w)
             if len(norm) >= 2 and norm not in IGNORE_WORDS:
+                post_stems.add(norm)
+        raw_tokens.extend(post_stems)
+
+    # 3. 클러스터링된 대표 뉴스 제목 (복붙 기사는 이미 1개로 합쳐져 있으므로 왜곡 없음)
+    for n in news_list:
+        clean_t = n['title'].rsplit(' - ', 1)[0]
+        words = re.findall(r'[가-힣A-Za-z0-9]{2,}', clean_t)
+        post_stems = set()
+        for w in words:
+            norm = normalize_korean_noun(w)
+            if len(norm) >= 2 and norm not in IGNORE_WORDS and not re.match(r'^\d+[월일편명개년배위만원]$', norm):
                 post_stems.add(norm)
         raw_tokens.extend(post_stems)
 
@@ -518,7 +629,7 @@ def extract_hot_keywords(dc_posts, jongto_posts):
     common_keywords = [(kw, cnt) for kw, cnt in merged_freq.most_common() if cnt >= 2]
     return common_keywords[:12]
 
-# --- 7. HTML 문자열 생성 (병렬 수집으로 2~3초 내 완료) ---
+# --- 7. HTML 문자열 생성 (멀티스레딩 병렬 수집) ---
 def generate_html_string():
     with ThreadPoolExecutor(max_workers=10) as executor:
         f_dc = executor.submit(get_dc_best_posts)
@@ -533,7 +644,7 @@ def generate_html_string():
         stock = f_stock.result()
         youtube_data = [f.result() for f in f_yt]
 
-    hot_keywords = extract_hot_keywords(dc_posts, jongto_posts)
+    hot_keywords = extract_hot_keywords(dc_posts, jongto_posts, news)
     
     kst = timezone(timedelta(hours=9))
     current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H:%M:%S")
@@ -601,7 +712,7 @@ def generate_html_string():
                 <img src="{v['thumb']}" alt="thumb" onerror="this.style.display='none'">
                 <div class="yt-info">
                     <a href="{v['link']}" target="_blank">{v['title']}</a>
-                    <div class="yt-meta">{v['date']} | 조회수 {v['views']}회</div>
+                    <div class="yt-meta">{v['date']} | 조회수 {v['views']}</div>
                 </div>
             </div>
             """
@@ -702,7 +813,7 @@ def generate_html_string():
     </div>
 
     <div class="radar-bar">
-        <span class="radar-title">🔥 개념글·종토방 2회 이상 중복 키워드:</span>
+        <span class="radar-title">🔥 실시간 이슈 핵심 명사 (2회 이상 중복):</span>
         {kw_html}
     </div>
 
@@ -824,7 +935,7 @@ def generate_html_string():
 """
     return html
 
-# --- Vercel 실시간 웹 송출용 핸들러 (api/index.py 에서 작동) ---
+# --- Vercel 실시간 웹 송출용 핸들러 (api/index.py) ---
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -837,9 +948,9 @@ class handler(BaseHTTPRequestHandler):
             error_msg = f"<html><body style='background:#121212;color:#fff;'><h1>로딩 중 에러 발생</h1><p>{e}</p></body></html>"
             self.wfile.write(error_msg.encode('utf-8'))
 
-# --- GitHub Actions 정적 파일 생성용 (monitor.py 에서 작동) ---
+# --- GitHub Actions 정적 파일 생성용 (monitor.py) ---
 if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html 업데이트 완료!")
+    print("✅ theborn_dashboard.html V4 업데이트 완료!")
