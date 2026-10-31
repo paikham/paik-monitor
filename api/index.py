@@ -4,22 +4,29 @@ import feedparser
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler
 import re
-import json
 
-SESSION = requests.Session()
 COMMON_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
 }
+
+def decode_html(res):
+    """네이버 금융 등의 UTF-8 / CP949(EUC-KR) 인코딩 충돌을 자동으로 해결합니다."""
+    try:
+        return res.content.decode('utf-8')
+    except UnicodeDecodeError:
+        return res.content.decode('cp949', 'replace')
 
 # --- 1. 디시인사이드 골목식당 갤러리 개념글 크롤링 ---
 def get_dc_best_posts():
     url = "https://gall.dcinside.com/board/lists/?id=bjwstreet&exception_mode=recommend"
     headers = {**COMMON_HEADERS, 'Referer': 'https://gall.dcinside.com/'}
     try:
-        response = SESSION.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.content, 'html.parser')
+        response = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(decode_html(response), 'html.parser')
         posts = soup.select('.us-post')
         
         results = []
@@ -43,107 +50,95 @@ def get_dc_best_posts():
                 })
         return results if results else [{'title': '개념글 목록이 비어있습니다.', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
     except Exception as e:
-        return [{'title': f'갤러리 로딩 실패: {str(e)[:25]}', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
+        return [{'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
 
-# --- 2. 네이버 종목토론방 (파라미터 수정된 모바일 API + 메인페이지 + 게시판 3중 수집) ---
+# --- 2. 네이버 종목토론방 (JSON 트리 탐색 + PC/메인 다중 파싱) ---
 def get_naver_jongtobang(ticker_code="475560"):
     results = []
     
-    # 1순위: 네이버 모바일 증권 공식 JSON API (rsno=0 버그 제거)
-    mobile_urls = [
-        f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?size=20",
-        f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}"
-    ]
+    # 1순위: 네이버 모바일 증권 공식 JSON API
+    m_url = f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?size=20"
     m_headers = {
         **COMMON_HEADERS,
         'Referer': f'https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss',
         'Accept': 'application/json, text/plain, */*'
     }
-    for m_url in mobile_urls:
+    try:
+        res = requests.get(m_url, headers=m_headers, timeout=4)
+        if res.status_code == 200:
+            data = res.json()
+            found_items = []
+            def find_posts(obj):
+                if isinstance(obj, dict):
+                    if ('title' in obj or 'subject' in obj) and ('date' in obj or 'writtenAt' in obj or 'readCount' in obj or 'discussionId' in obj):
+                        found_items.append(obj)
+                    else:
+                        for v in obj.values():
+                            find_posts(v)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        find_posts(item)
+            find_posts(data)
+
+            for item in found_items[:20]:
+                title = (item.get('title') or item.get('subject') or '').strip()
+                if not title:
+                    continue
+                nid = item.get('discussionId') or item.get('nid') or item.get('articleId') or ''
+                link = f"https://finance.naver.com/item/board_read.naver?code={ticker_code}&nid={nid}" if nid else f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss"
+                date_raw = str(item.get('date') or item.get('writtenAt') or '')
+                date = date_raw[5:16].replace('-', '.') if len(date_raw) >= 16 else date_raw[:10]
+                views = f"{int(item.get('readCount') or item.get('viewCount') or 0):,}"
+                good = str(item.get('goodCount') or item.get('sympathyCount') or 0)
+                bad = str(item.get('badCount') or item.get('antipathyCount') or 0)
+                cmt_cnt = item.get('commentCount') or 0
+                comments = f"[{cmt_cnt}]" if cmt_cnt else ""
+                results.append({
+                    'title': title, 'link': link, 'comments': comments,
+                    'date': date, 'views': views, 'good': good, 'bad': bad
+                })
+            if results:
+                return results
+    except Exception:
+        pass
+
+    # 2순위: 네이버 금융 PC 종목토론실 & 종목 메인 페이지 파싱 (UTF-8/CP949 자동 호환)
+    for page_url in [
+        f"https://finance.naver.com/item/board.naver?code={ticker_code}",
+        f"https://finance.naver.com/item/main.naver?code={ticker_code}"
+    ]:
         try:
-            res = SESSION.get(m_url, headers=m_headers, timeout=8)
-            if res.status_code == 200:
-                data = res.json()
-                items = data if isinstance(data, list) else (data.get('result') or data.get('items') or data.get('datas') or [])
-                if isinstance(items, dict):
-                    items = items.get('list') or items.get('items') or []
-                for item in items[:20]:
-                    if not isinstance(item, dict):
-                        continue
-                    title = (item.get('title') or item.get('subject') or '').strip()
-                    if not title:
-                        continue
-                    nid = item.get('discussionId') or item.get('nid') or item.get('articleId') or ''
-                    link = f"https://finance.naver.com/item/board_read.naver?code={ticker_code}&nid={nid}" if nid else f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss"
-                    date_raw = str(item.get('date') or item.get('writtenAt') or item.get('regDate') or '')
-                    date = date_raw[5:16].replace('-', '.') if len(date_raw) >= 16 else date_raw[:10]
-                    views = f"{int(item.get('readCount') or item.get('viewCount') or 0):,}"
-                    good = str(item.get('goodCount') or item.get('sympathyCount') or 0)
-                    bad = str(item.get('badCount') or item.get('antipathyCount') or 0)
-                    cmt_cnt = item.get('commentCount') or 0
-                    comments = f"[{cmt_cnt}]" if cmt_cnt else ""
-                    results.append({
-                        'title': title, 'link': link, 'comments': comments,
-                        'date': date, 'views': views, 'good': good, 'bad': bad
-                    })
-                if results:
-                    return results
+            res = requests.get(page_url, headers={**COMMON_HEADERS, 'Referer': 'https://finance.naver.com/'}, timeout=4)
+            soup = BeautifulSoup(decode_html(res), 'html.parser')
+            for a_el in soup.select('a[href*="board_read.naver"]'):
+                title = (a_el.get('title') or a_el.text or '').strip()
+                if not title:
+                    continue
+                href = a_el.get('href', '')
+                link = "https://finance.naver.com" + href if href.startswith('/') else href
+                row = a_el.find_parent('tr')
+                if row:
+                    cmt_el = row.select_one('span.tah')
+                    comments = cmt_el.text.strip() if cmt_el and '[' in cmt_el.text else ""
+                    tds = row.select('td')
+                    date = tds[0].text.strip() if len(tds) > 0 else '-'
+                    views = tds[3].text.strip() if len(tds) > 3 else '-'
+                    good = tds[4].text.strip() if len(tds) > 4 else '0'
+                    bad = tds[5].text.strip() if len(tds) > 5 else '0'
+                else:
+                    comments, date, views, good, bad = "", "최신", "-", "-", "-"
+                results.append({
+                    'title': title, 'link': link, 'comments': comments,
+                    'date': date, 'views': views, 'good': good, 'bad': bad
+                })
+                if len(results) >= 20:
+                    break
+            if results:
+                return results
         except Exception:
             pass
 
-    # 2순위: 네이버 금융 PC 종목토론실 (BeautifulSoup 자동 인코딩 감지)
-    board_url = f"https://finance.naver.com/item/board.naver?code={ticker_code}"
-    pc_headers = {**COMMON_HEADERS, 'Referer': f'https://finance.naver.com/item/main.naver?code={ticker_code}'}
-    try:
-        res = SESSION.get(board_url, headers=pc_headers, timeout=8)
-        soup = BeautifulSoup(res.content, 'html.parser')
-        for a_el in soup.select('a[href*="board_read.naver"]'):
-            title = (a_el.get('title') or a_el.text or '').strip()
-            if not title:
-                continue
-            link = "https://finance.naver.com" + a_el['href'] if a_el['href'].startswith('/') else a_el['href']
-            row = a_el.find_parent('tr')
-            if not row:
-                continue
-            cmt_el = row.select_one('span.tah')
-            comments = cmt_el.text.strip() if cmt_el and '[' in cmt_el.text else ""
-            tds = row.select('td')
-            date = tds[0].text.strip() if len(tds) > 0 else '-'
-            views = tds[3].text.strip() if len(tds) > 3 else '-'
-            good = tds[4].text.strip() if len(tds) > 4 else '0'
-            bad = tds[5].text.strip() if len(tds) > 5 else '0'
-            results.append({
-                'title': title, 'link': link, 'comments': comments,
-                'date': date, 'views': views, 'good': good, 'bad': bad
-            })
-            if len(results) >= 20:
-                break
-        if results:
-            return results
-    except Exception:
-        pass
-
-    # 3순위: 네이버 증권 종목 메인 페이지(item/main.naver) 우측 하단 종목토론실 섹션 추출
-    main_url = f"https://finance.naver.com/item/main.naver?code={ticker_code}"
-    try:
-        res = SESSION.get(main_url, headers=COMMON_HEADERS, timeout=8)
-        soup = BeautifulSoup(res.content, 'html.parser')
-        for a_el in soup.select('a[href*="board_read.naver"]'):
-            title = (a_el.get('title') or a_el.text or '').strip()
-            if not title:
-                continue
-            link = "https://finance.naver.com" + a_el['href'] if a_el['href'].startswith('/') else a_el['href']
-            li = a_el.find_parent('li') or a_el.find_parent('tr')
-            date_el = li.select_one('span.date') if li else None
-            date = date_el.text.strip() if date_el else '최신'
-            results.append({
-                'title': title, 'link': link, 'comments': '',
-                'date': date, 'views': '실시간', 'good': '-', 'bad': '-'
-            })
-    except Exception:
-        pass
-
-    return results if results else [{'title': '종토방 직접 이동하기 (클릭)', 'link': f'https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss', 'comments': '', 'date': '실시간', 'views': '-', 'good': '-', 'bad': '-'}]
+    return [{'title': '종토방 실시간 글 보러가기 (클릭)', 'link': f'https://m.stock.naver.com/domestic/stock/{ticker_code}/discuss', 'comments': '', 'date': '실시간', 'views': '-', 'good': '-', 'bad': '-'}]
 
 # --- 3. 뉴스 크롤링 & 보도자료 복붙(클러스터링) 판독기 ---
 SPAM_KEYWORDS = [
@@ -181,12 +176,10 @@ def classify_single_news(title):
 
 def get_latest_news():
     raw_list = []
-    seen_urls = set()
-
     q_encoded = quote("백종원 OR 더본코리아 when:3d")
     rss_url = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
     try:
-        res = SESSION.get(rss_url, headers=COMMON_HEADERS, timeout=10)
+        res = requests.get(rss_url, headers=COMMON_HEADERS, timeout=5)
         feed = feedparser.parse(res.content)
         for entry in feed.entries[:40]:
             full_t = entry.title
@@ -243,7 +236,7 @@ def get_latest_news():
         })
     return final_news
 
-# --- 4. 네이버 금융 주가 + 밸류에이션 + 전자공시 (다중 경로) ---
+# --- 4. 네이버 금융 주가 + 밸류에이션 + 전자공시 ---
 def get_stock_and_disclosures(ticker_code="475560"):
     api_url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{ticker_code}"
     stock_info = {
@@ -253,7 +246,7 @@ def get_stock_and_disclosures(ticker_code="475560"):
         'disclosures': []
     }
     try:
-        res = SESSION.get(api_url, headers=COMMON_HEADERS, timeout=10)
+        res = requests.get(api_url, headers=COMMON_HEADERS, timeout=4)
         data = res.json()
         item = data['result']['areas'][0]['datas'][0]
         
@@ -292,54 +285,35 @@ def get_stock_and_disclosures(ticker_code="475560"):
         pass
 
     disclosures = []
-    # 공시 1순위: 모바일 증권 공시 JSON API
-    try:
-        m_notice_url = f"https://m.stock.naver.com/api/stock/{ticker_code}/notice?size=6"
-        r = SESSION.get(m_notice_url, headers=COMMON_HEADERS, timeout=6)
-        if r.status_code == 200:
-            n_data = r.json()
-            n_list = n_data if isinstance(n_data, list) else (n_data.get('result') or n_data.get('items') or [])
-            for nd in n_list[:6]:
-                if isinstance(nd, dict) and nd.get('title'):
-                    disclosures.append({
-                        'title': nd.get('title'),
-                        'link': f"https://m.stock.naver.com/domestic/stock/{ticker_code}/notice",
-                        'info': nd.get('officeName', 'DART공시'),
-                        'date': str(nd.get('dt') or nd.get('date') or '')[:10]
-                    })
-    except Exception:
-        pass
-
-    # 공시 2순위: PC 공시 페이지 및 메인 페이지(item/main.naver) 파싱
-    if not disclosures:
-        for n_url, ref in [
-            (f"https://finance.naver.com/item/news_notice.naver?code={ticker_code}", f"https://finance.naver.com/item/news.naver?code={ticker_code}"),
-            (f"https://finance.naver.com/item/main.naver?code={ticker_code}", "https://finance.naver.com/")
-        ]:
-            try:
-                n_res = SESSION.get(n_url, headers={**COMMON_HEADERS, 'Referer': ref}, timeout=6)
-                n_soup = BeautifulSoup(n_res.content, 'html.parser')
-                for a_el in n_soup.select('a[href*="notice_read.naver"]'):
-                    d_title = a_el.text.strip()
-                    if not d_title:
-                        continue
-                    d_link = "https://finance.naver.com" + a_el['href'] if a_el['href'].startswith('/') else a_el['href']
-                    parent = a_el.find_parent('tr') or a_el.find_parent('li')
-                    tds = parent.select('td') if parent else []
-                    d_info = tds[1].text.strip() if len(tds) > 1 else '공시'
-                    d_date = tds[2].text.strip() if len(tds) > 2 else ''
-                    disclosures.append({'title': d_title, 'link': d_link, 'info': d_info, 'date': d_date})
-                    if len(disclosures) >= 6:
-                        break
-                if disclosures:
+    for n_url in [
+        f"https://finance.naver.com/item/news_notice.naver?code={ticker_code}",
+        f"https://finance.naver.com/item/main.naver?code={ticker_code}"
+    ]:
+        try:
+            n_res = requests.get(n_url, headers=COMMON_HEADERS, timeout=4)
+            n_soup = BeautifulSoup(decode_html(n_res), 'html.parser')
+            for a_el in n_soup.select('a[href*="notice_read.naver"]'):
+                d_title = a_el.text.strip()
+                if not d_title:
+                    continue
+                href = a_el.get('href', '')
+                d_link = "https://finance.naver.com" + href if href.startswith('/') else href
+                parent = a_el.find_parent('tr') or a_el.find_parent('li')
+                tds = parent.select('td') if parent else []
+                d_info = tds[1].text.strip() if len(tds) > 1 else '공시'
+                d_date = tds[2].text.strip() if len(tds) > 2 else ''
+                disclosures.append({'title': d_title, 'link': d_link, 'info': d_info, 'date': d_date})
+                if len(disclosures) >= 5:
                     break
-            except Exception:
-                pass
+            if disclosures:
+                break
+        except Exception:
+            pass
 
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 5. 유튜브 InnerTube API (POST /youtubei/v1) + 스냅샷 백업 엔진 ---
+# --- 5. 유튜브 InnerTube API (병렬 고속 수집 + 스냅샷 백업) ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
@@ -403,18 +377,12 @@ YOUTUBE_CHANNELS = [
 ]
 
 INNERTUBE_CONTEXT = {
-    "client": {
-        "hl": "ko",
-        "gl": "KR",
-        "clientName": "WEB",
-        "clientVersion": "2.20251020.01.00"
-    }
+    "client": {"hl": "ko", "gl": "KR", "clientName": "WEB", "clientVersion": "2.20251020.01.00"}
 }
 
 def extract_videos_from_innertube_json(data, max_count=3):
     videos = []
     seen_vids = set()
-    
     def walk(obj):
         if len(videos) >= max_count:
             return
@@ -446,95 +414,50 @@ def extract_videos_from_innertube_json(data, max_count=3):
         elif isinstance(obj, list):
             for item in obj:
                 walk(item)
-
     walk(data)
     return videos
 
-def fetch_via_innertube(ch):
-    # 1차: 채널 ID가 있으면 InnerTube Browse API (POST /youtubei/v1/browse) 직접 호출
+def fetch_single_channel(ch):
+    vids = []
     if ch.get('id'):
         try:
             b_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
-            payload = {
-                "context": INNERTUBE_CONTEXT,
-                "browseId": ch['id'],
-                "params": "EgZ2aWRlb3PyBgQKAjoA" # 최신 동영상 탭
-            }
-            res = SESSION.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=7)
+            payload = {"context": INNERTUBE_CONTEXT, "browseId": ch['id'], "params": "EgZ2aWRlb3PyBgQKAjoA"}
+            res = requests.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
             if res.status_code == 200:
                 vids = extract_videos_from_innertube_json(res.json(), 3)
-                if vids:
-                    return vids
         except Exception:
             pass
 
-    # 2차: InnerTube Search API (POST /youtubei/v1/search)
-    if ch.get('search_query'):
+    if not vids and ch.get('search_query'):
         try:
             s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
-            payload = {
-                "context": INNERTUBE_CONTEXT,
-                "query": ch['search_query'],
-                "params": "CAI%253D" # 업로드 날짜순
-            }
-            res = SESSION.post(s_url, json=payload, headers=COMMON_HEADERS, timeout=7)
+            payload = {"context": INNERTUBE_CONTEXT, "query": ch['search_query'], "params": "CAI%253D"}
+            res = requests.post(s_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
             if res.status_code == 200:
                 vids = extract_videos_from_innertube_json(res.json(), 3)
-                if vids:
-                    return vids
         except Exception:
             pass
 
-    return []
+    if not vids:
+        for item in ch.get('fallback', []):
+            vid = item['vid']
+            vids.append({
+                'title': item['title'],
+                'link': f"https://www.youtube.com/watch?v={vid}",
+                'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+                'date': item['date'],
+                'views': item['views']
+            })
 
-def update_fallback_views_via_player(fallback_list):
-    """스냅샷 백업 사용 시 InnerTube Player API로 실시간 조회수를 최신화합니다."""
-    results = []
-    p_url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
-    for item in fallback_list:
-        vid = item['vid']
-        views = item['views']
-        title = item['title']
-        try:
-            payload = {
-                "context": {
-                    "client": {"hl": "ko", "gl": "KR", "clientName": "ANDROID", "clientVersion": "19.29.37"}
-                },
-                "videoId": vid
-            }
-            r = SESSION.post(p_url, json=payload, timeout=4)
-            if r.status_code == 200:
-                vd = r.json().get('videoDetails', {})
-                if vd.get('viewCount'):
-                    views = f"{int(vd['viewCount']):,}"
-                if vd.get('title'):
-                    title = vd['title']
-        except Exception:
-            pass
-        results.append({
-            'title': title,
-            'link': f"https://www.youtube.com/watch?v={vid}",
-            'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
-            'date': item['date'],
-            'views': views
-        })
-    return results
+    return {
+        'name': ch['name'],
+        'group': ch['group'],
+        'handle': ch['handle'],
+        'videos': vids
+    }
 
-def get_youtube_updates():
-    results = []
-    for ch in YOUTUBE_CHANNELS:
-        vids = fetch_via_innertube(ch)
-        if not vids:
-            vids = update_fallback_views_via_player(ch.get('fallback', []))
-        results.append({
-            'name': ch['name'],
-            'group': ch['group'],
-            'handle': ch['handle'],
-            'videos': vids
-        })
-    return results
-
-# --- 6. 자연어 어간 분석 기반 실시간 공통 키워드 추출기 (수동 입력 제로) ---
+# --- 6. 자연어 어간 분석 기반 실시간 공통 키워드 추출기 (수동 단어장 없음) ---
 IGNORE_WORDS = {
     '백종원', '백종원이', '백종원의', '백종원씨', '더본', '더본코리아', '대표', '대표님', '갤주',
     '진짜', '이거', '근황', '지금', '오늘', '오늘자', '최근', '현재', '그냥', '너무', '존나',
@@ -548,22 +471,18 @@ JOSA_PATTERN = re.compile(
 )
 
 def normalize_korean_word(w):
-    # ㅋ, ㅎ, ㅠ, ㅜ 등 단모음/단자음 제거
     w = re.sub(r'[ㄱ-ㅎㅏ-ㅣ]+', '', w)
     if len(w) < 2 or w.isdigit():
         return ''
-    # 끝에 붙은 조사 제거 (제거 후 2글자 이상 남을 때만)
     stemmed = JOSA_PATTERN.sub('', w)
     if len(stemmed) >= 2:
         w = stemmed
     return w
 
 def extract_hot_keywords(dc_posts, jongto_posts):
-    """개념글 및 종토방 제목에서 2회 이상 공통 언급된 단어를 빈도순으로 자동 추출합니다."""
     raw_tokens = []
     for p in dc_posts:
         words = re.findall(r'[가-힣A-Za-z0-9]{2,}', p['title'])
-        # 한 게시글 제목 안에서 같은 단어가 두 번 카운트되지 않도록 set 처리
         post_stems = set()
         for w in words:
             norm = normalize_korean_word(w)
@@ -572,7 +491,7 @@ def extract_hot_keywords(dc_posts, jongto_posts):
         raw_tokens.extend(post_stems)
 
     for j in jongto_posts:
-        if '직접 이동하기' in j['title'] or '실패' in j['title']:
+        if '보러가기' in j['title'] or '실패' in j['title']:
             continue
         words = re.findall(r'[가-힣A-Za-z0-9]{2,}', j['title'])
         post_stems = set()
@@ -582,7 +501,6 @@ def extract_hot_keywords(dc_posts, jongto_posts):
                 post_stems.add(norm)
         raw_tokens.extend(post_stems)
 
-    # 접두사 기반 유사 어간 병합 (예: '우지커피'와 '우지커피점', '폐점'과 '폐점한' 통합)
     freq = Counter(raw_tokens)
     sorted_unique = sorted(freq.keys(), key=len)
     merged_freq = Counter()
@@ -597,18 +515,24 @@ def extract_hot_keywords(dc_posts, jongto_posts):
         stem_map[word] = mapped
         merged_freq[mapped] += freq[word]
 
-    # 2회 이상 등장한 공통 단어만 빈도순 추출
     common_keywords = [(kw, cnt) for kw, cnt in merged_freq.most_common() if cnt >= 2]
     return common_keywords[:12]
 
-# --- 7. HTML 대시보드 생성 ---
-def generate_html_dashboard():
-    print("🚀 더본코리아 빽모니터링 PRO (V3) 데이터 수집 시작...")
-    dc_posts = get_dc_best_posts()
-    jongto_posts = get_naver_jongtobang()
-    news = get_latest_news()
-    stock = get_stock_and_disclosures()
-    youtube_data = get_youtube_updates()
+# --- 7. HTML 문자열 생성 (병렬 수집으로 2~3초 내 완료) ---
+def generate_html_string():
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        f_dc = executor.submit(get_dc_best_posts)
+        f_jt = executor.submit(get_naver_jongtobang)
+        f_news = executor.submit(get_latest_news)
+        f_stock = executor.submit(get_stock_and_disclosures)
+        f_yt = [executor.submit(fetch_single_channel, ch) for ch in YOUTUBE_CHANNELS]
+
+        dc_posts = f_dc.result()
+        jongto_posts = f_jt.result()
+        news = f_news.result()
+        stock = f_stock.result()
+        youtube_data = [f.result() for f in f_yt]
+
     hot_keywords = extract_hot_keywords(dc_posts, jongto_posts)
     
     kst = timezone(timedelta(hours=9))
@@ -665,7 +589,7 @@ def generate_html_dashboard():
             </li>
             """
     else:
-        disc_html = f"<li><a href='https://dart.fss.or.kr/' target='_blank' style='color:#888;'>최근 신규 공시 없음 (DART 바로가기 ↗)</a></li>"
+        disc_html = "<li><a href='https://dart.fss.or.kr/' target='_blank' style='color:#888;'>최근 신규 공시 없음 (DART 바로가기 ↗)</a></li>"
 
     yt_critic_html = ""
     yt_official_html = ""
@@ -774,7 +698,7 @@ def generate_html_dashboard():
             <img src="https://start.theborn.co.kr/images/brand/hongkong/common/logo.png" alt="홍콩반점">
         </div>
         <h1>더본코리아 빽모니터링 PRO</h1>
-        <div class="update-time">마지막 업데이트: {current_time} (KST 기준 실시간 수집)</div>
+        <div class="update-time">마지막 업데이트: {current_time} (접속 즉시 실시간 병렬 수집)</div>
     </div>
 
     <div class="radar-bar">
@@ -898,9 +822,24 @@ def generate_html_dashboard():
 </body>
 </html>
 """
-    with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
-        f.write(html)
-    print("\n✅ 더본코리아 빽모니터링 PRO (V3) 완결판 생성 완료!")
+    return html
 
+# --- Vercel 실시간 웹 송출용 핸들러 (api/index.py 에서 작동) ---
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.end_headers()
+        try:
+            html_content = generate_html_string()
+            self.wfile.write(html_content.encode('utf-8'))
+        except Exception as e:
+            error_msg = f"<html><body style='background:#121212;color:#fff;'><h1>로딩 중 에러 발생</h1><p>{e}</p></body></html>"
+            self.wfile.write(error_msg.encode('utf-8'))
+
+# --- GitHub Actions 정적 파일 생성용 (monitor.py 에서 작동) ---
 if __name__ == "__main__":
-    generate_html_dashboard()
+    html_out = generate_html_string()
+    with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
+        f.write(html_out)
+    print("✅ theborn_dashboard.html 업데이트 완료!")
