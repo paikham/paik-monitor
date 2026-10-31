@@ -30,7 +30,7 @@ def get_dc_best_posts():
         posts = soup.select('.us-post')
         
         results = []
-        for post in posts[:30]:
+        for post in posts[:50]:
             title_element = post.select_one('.gall_tit a:not(.icon_pic_n)') or post.select_one('.gall_tit a')
             if title_element and not title_element.text.startswith('공지'):
                 title = title_element.text.strip()
@@ -809,7 +809,7 @@ def generate_html_string():
             <img src="https://start.theborn.co.kr/images/brand/hongkong/common/logo.png" alt="홍콩반점">
         </div>
         <h1>더본코리아 빽모니터링 PRO</h1>
-        <div class="update-time">마지막 업데이트: {current_time} (접속 즉시 실시간 병렬 수집)</div>
+        <div class="update-time">마지막 업데이트: {current_time}</div>
     </div>
 
     <div class="radar-bar">
@@ -892,7 +892,7 @@ def generate_html_string():
         </div>
 
         <div class="card" style="grid-column: span 2;">
-            <h2>🦅 골목식당 갤러리 개념글 (실시간 파묘 30선)</h2>
+            <h2>🦅 골목식당 갤러리 개념글 (실시간 파묘 50선)</h2>
             <ul class="scroll-list" style="max-height: 550px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px;">
                 {dc_html}
             </ul>
