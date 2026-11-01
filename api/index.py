@@ -6,36 +6,62 @@ from urllib.parse import quote
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
-import os
 import re
 import json
 
 # ==============================================================================
-# 🎯 [사용자 직접 관리 구역] 뉴스 분류 키워드 사전
-# 웹 대시보드의 [⚙️ 키워드 관리] -> [📋 파이썬 코드 복사] 버튼으로 생성된 코드를
-# 아래 NEWS_KEYWORDS 에 그대로 덮어씌우면 서버 기본값으로 영구 반영됩니다.
-# (판독 우선순위: 1순위 SPAM(제외) -> 2순위 RISK(리스크) -> 3순위 PR(언플) -> 일반)
+# 🎯 [사용자 직접 관리 구역 1] 뉴스 분류 키워드 사전 (보내주신 최신 설정 반영 완료)
+# 웹 화면의 [📋 파이썬 설정 복사] 버튼으로 언제든 세트로 복사해 덮어씌울 수 있습니다.
 # ==============================================================================
 NEWS_KEYWORDS = {
     "RISK": [
-        "논란", "고소", "점주", "폐업", "폐점", "공정위", "국감", "부진", "하락", "소송",
-        "위반", "사과", "갈등", "불만", "신고", "적발", "폭락", "리스크", "정솔", "지혁",
-        "염지", "엉터리", "허점", "실수", "횡령", "혐의", "보완수사", "수사", "과징금", "과태료",
-        "허풍", "시험대", "위생", "비판", "외면", "철수", "갑질", "허위", "과장", "급락",
-        "반토막", "우지커피", "눈물", "손절", "차단", "발각", "기만", "파묘", "태극기", "오류",
+        "토막", "문닫", "논란", "고소", "점주", "폐업", "폐점", "공정위", "국감", "부진",
+        "하락", "소송", "위반", "사과", "갈등", "불만", "신고", "적발", "폭락", "리스크",
+        "정솔", "지혁", "염지", "허점", "실수", "횡령", "혐의", "보완수사", "수사", "과징금",
+        "과태료", "허풍", "시험대", "위생", "비판", "외면", "철수", "갑질", "허위", "과장",
+        "급락", "우지커피", "눈물", "손절", "차단", "발각", "기만", "파묘", "태극기", "오류",
         "지적", "휘청", "급감", "축소", "실태", "문 닫", "틀렸다", "감소", "타격", "적자"
     ],
     "PR": [
-        "대박", "웨이팅", "100번", "출시", "할인", "후원", "기부", "성황", "인기", "호평",
-        "매출", "소유진", "내조", "응원", "쏜다", "쐈다", "러브콜", "열풍", "돌파", "오픈",
-        "공략", "시연", "TBK", "프로모션", "제공", "500원", "파격딜", "당근페이", "이벤트", "행보",
-        "특가", "상생", "협약", "MOU", "선보", "강화", "확대", "진출", "개최", "성료",
-        "나눔", "무자본", "승부수", "성공", "뚫는다", "유통망", "블루오션", "세일즈", "외식왕", "근황",
-        "송훈", "파브리", "진두지휘", "반전", "풍미", "러시", "완판"
+        "외식사업가", "송훈", "공짜", "100원", "통했다", "지휘", "대기", "대박", "웨이팅", "출시",
+        "할인", "후원", "기부", "성황", "인기", "호평", "소유진", "내조", "응원", "쏜다",
+        "쐈다", "러브콜", "열풍", "돌파", "오픈", "공략", "시연", "프로모션", "제공", "500원",
+        "파격딜", "당근페이", "이벤트", "행보", "특가", "상생", "협약", "MOU", "선보", "강화",
+        "확대", "진출", "개최", "성료", "나눔", "승부수", "성공", "뚫는다", "유통망", "블루오션",
+        "세일즈", "외식왕", "근황", "파브리", "반전", "풍미", "러시", "완판"
     ],
     "SPAM": [
-        "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅", "먹튀",
+        "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅",
         "오늘의식탁", "똑똑한유통", "유통가 투데이", "푸드 투데이", "브리핑", "단신"
+    ]
+}
+
+# ==============================================================================
+# 🎯 [사용자 직접 관리 구역 2] 실시간 이슈 핵심 명사 (레이더) 설정 사전
+# - BOOST: 복합명사/고유명사가 쪼개지지 않고 우선 추출되도록 지정하는 핵심 키워드
+# - STOP : 레이더 랭킹에서 무조건 제외할 불용어 (웹에서 배지의 × 클릭 시 자동 추가됨)
+# ==============================================================================
+RADAR_KEYWORDS = {
+    "BOOST": [
+        "빽다방", "우지커피", "홍콩반점", "연돈볼카츠", "새마을식당", "골목셰프", "골목식당",
+        "태극기", "당근페이", "주담대", "오너리스크", "정솔", "지혁", "소유진", "김재환",
+        "오재나", "탐코", "상하이", "청두", "예산", "삼국축제", "가마치", "제육볶음",
+        "밀전병", "창업설명회", "보완수사", "혐의없음", "국정감사", "공정위", "대패삼겹살",
+        "원조쌈밥집", "유정수", "최강록", "정지선", "백반집", "국밥집", "한티역", "순감소"
+    ],
+    "STOP": [
+        "근데", "아니", "진짜", "이거", "저거", "뭔가", "이제", "와서", "혹시", "니들",
+        "알고", "어쩌라고", "백종원", "백종원이", "백종원의", "백종원씨", "더본", "더본코리아",
+        "대표", "대표님", "갤주", "종팔이", "근황", "지금", "오늘", "오늘자", "최근", "현재",
+        "그냥", "너무", "존나", "새끼", "씨발", "시발", "병신", "싯팔새끼", "이새끼", "사람",
+        "솔직히", "진지하게", "경고", "속보", "다시보는", "명작", "이유", "한계", "명확한",
+        "도와준", "비교", "진행상황", "유튭", "댓글", "민심", "왜이럼", "생각", "이렇게",
+        "모습", "보이는", "하는", "있는", "없는", "같음", "있다", "없다", "되다", "하다",
+        "이다", "같다", "보다", "오다", "가다", "주다", "알다", "모르다", "하면", "되면",
+        "얘기", "정도", "때문", "부분", "문제", "사실", "현황", "진격", "학인된", "어제",
+        "내일", "jpg", "jpeg", "png", "gif", "webp", "mp4", "dc", "app", "araboja",
+        "aravoja", "feat", "hot", "유래", "음식", "사진", "영상", "최신", "방법", "하나",
+        "리스트", "추천", "명언", "수급", "지랄", "레전드", "전문가", "인정하는", "증거자료"
     ]
 }
 # ==============================================================================
@@ -83,201 +109,158 @@ def get_dc_best_posts():
     except Exception as e:
         return [{'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
 
-# --- 2. 네이버 Npay 증권 종토방 & 주주오픈톡 파서 ---
-FALLBACK_OPENTALK = [
-    {"nick": "계획적인 바다사자", "text": "살다살다 주주를 고소하는 회사는 또 첨보네요"},
-    {"nick": "계획적인 바다사자", "text": "경찰서에서 연락이 왔는데 수사과로 오라고 하네요 ㅋㅋㅋ"},
-    {"nick": "계획적인 바다사자", "text": "더본코리아 고소 당하신분?"},
-    {"nick": "똘똘한 토끼", "text": "또 소스판다고 저러네...2년동안 실적하나없는걸"},
-    {"nick": "욱하는 강아지", "text": "고소할 변호사비 있으면 자사주 소각을해라...자사주주 소각말구"},
-    {"nick": "슬픈 달팽이", "text": "여기서 말실수하면 고소당하나요?"},
-    {"nick": "슬픈 코알라", "text": "1년정도 나두면 1만원 이하로도 내려갈까요? 그냥 묻어둘까? 정리할까? 고민이라서요."},
-    {"nick": "듀미미", "text": "살려주세요"}
-]
+# --- 2. 네이버 종토방 실시간 동적 수집 엔진 (하드코딩 더미 데이터 0%) ---
+def extract_posts_from_any_json(data, ticker_code="475560"):
+    """네이버 API의 다양한 JSON 응답 구조에서 게시글 리스트를 재귀적으로 추출합니다."""
+    posts = []
+    seen_ids = set()
 
-FALLBACK_JONGTO = [
-    {"title": "[HOT] 고소", "desc": "단어 알지? 싸워!!!!! 매번 게시판 보고 싸워!!!! 바보같이 글써서 고소를 당한다거나 그런것은 절대 안돼 하지만 순간 순간마다 조심해서 조롱해", "author": "TROMBONE", "date": "2026.10.31.", "views": "62", "good": "22", "bad": "1", "comments": "[1]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431390663"},
-    {"title": "찐 대패 삼겹살 원조 근황", "desc": "원조 Mr.kim은 오늘도 대패로 깎는다", "author": "나랏말싸미", "date": "2026.10.31.", "views": "23", "good": "4", "bad": "0", "comments": "", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431406349"},
-    {"title": "빽다방 컵홀더가 바뀌었다 ㅠㅠ", "desc": "오늘도 나의 최애 에어폼 아메리카노를 한잔 마시는데 백주부님의 Paik 들어간 노란 컵홀더가 엄보람 바리스타 컵홀더로 바뀌었다 ㅠㅠ", "author": "열려있는시황흐름멘토", "date": "2026.10.31.", "views": "29", "good": "0", "bad": "13", "comments": "[1]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431405392"},
-    {"title": "야 이거 삼겹살 다 버릴뻔했네", "desc": "그래서 내가 버림", "author": "뻐꺼0610", "date": "2026.10.31.", "views": "26", "good": "14", "bad": "0", "comments": "[1]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431405325"},
-    {"title": "게티이미지 라는 회사가 상장 3년만에 폐업 했음.", "desc": "사진 이미지 관련 미국 회사지만 그래프가 더본코리아와 거의 비슷함. ㅋㅋㅋ 결국 상장폐지, 폐업함. ㅋㅋㅋ", "author": "jossssssssss", "date": "2026.10.31.", "views": "9", "good": "6", "bad": "0", "comments": "", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431405135"},
-    {"title": "거울치료 라는게 이런걸까?", "desc": "남을 손가락질 할 때 구부리며 남은 세 손가락은 자신을 가리킨다지 그동안 지적하던 여러 자료 화면들이 되려 나를...", "author": "주주환원운동", "date": "2026.10.31.", "views": "12", "good": "12", "bad": "0", "comments": "", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431404921"},
-    {"title": "미국영업실적이 바로 안잡히고 미국 자회사실적으로 된다면", "desc": "더본의 손실을 줄이려면 미국자회사를 서류상 합병하는것이 더낫지않나 향후 더본이 영업실적이 좋아 안정권에 들어가면...", "author": "snbjwj", "date": "2026.10.31.", "views": "12", "good": "2", "bad": "0", "comments": "", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431404752"},
-    {"title": "더본 주가 올릴 방법은 딱 하나 입니다..", "desc": "현 시점에서 더본 주가를 올릴 방법은 딱 하나 밖에 없어요. 현재 더본이 가지고 있는 현금이 1000억 정도 된다고 합니다. 그 돈으로 주가 매수해서 소각 시키면...", "author": "내생각의소신", "date": "2026.10.31.", "views": "61", "good": "10", "bad": "1", "comments": "[4]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431403878"},
-    {"title": "이렇게 오른 종목 있으면 리스트 써봐유", "desc": "내가 코스닥, 코스피, 나스닥 종목중에 모르는 종목이 있을거 같애유?", "author": "바닥이아니었네", "date": "2026.10.31.", "views": "63", "good": "15", "bad": "1", "comments": "[4]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431401973"},
-    {"title": "오늘의 명언", "desc": "사람에게 귀천이 없으나 인격에는 귀천이 있다.", "author": "한우사랑음메", "date": "2026.10.31.", "views": "30", "good": "13", "bad": "1", "comments": "[2]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431401587"},
-    {"title": "오늘의 추천 드라마", "desc": "폭삭 속았수다", "author": "한우사랑음메", "date": "2026.10.31.", "views": "17", "good": "12", "bad": "1", "comments": "[1]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431401303"},
-    {"title": "상장하자마자", "desc": "적자나는거 실화냐 끝났노", "author": "김춘석", "date": "2026.10.31.", "views": "23", "good": "26", "bad": "1", "comments": "[1]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431398151"},
-    {"title": "외인수급보니", "desc": "하루 1천,2천,많으면 6천만원 매수하네유 저것들 외식비 벌려고 들어왔나?", "author": "서쪽에서", "date": "2026.10.31.", "views": "19", "good": "17", "bad": "1", "comments": "[1]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431396303"},
-    {"title": "음식장사해서 방송시청률 탑찍고", "desc": "유튜브구독자 617만명되고 코스피 상장까지한 경우는 백종원이 유일무이 아니냐? 나여~백종원...할만 하긴했어....", "author": "앟ㅣㅣㅇ", "date": "2026.10.31.", "views": "76", "good": "1", "bad": "25", "comments": "[5]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431396223"},
-    {"title": "앞으로 실적 좋아질 일 없다~~", "desc": "자영업 리스크 최고조 창업하겠나..? 그나마 버텨주는 빽다방 우지커피가 흡수중~~~ 우지커피 너무 맛있어 야르~~", "author": "야이발", "date": "2026.10.31.", "views": "45", "good": "18", "bad": "0", "comments": "[2]", "link": "https://m.stock.naver.com/domestic/stock/475560/discussion/431396093"}
-]
-
-def extract_slot_number(btn_el):
-    if not btn_el:
-        return "0"
-    active_digits = [s.text.strip() for s in btn_el.select('span[aria-hidden="false"]') if s.text.strip().isdigit()]
-    if active_digits:
-        return "".join(active_digits)
-    raw_nums = re.findall(r'\d+', btn_el.text)
-    return raw_nums[0] if raw_nums else "0"
-
-def parse_npay_discussion_dom(html_text, ticker_code="475560"):
-    soup = BeautifulSoup(html_text, 'html.parser')
-    posts, opentalks = [], []
-    seen_titles = set()
-
-    for item in soup.select('[class*="OpentalkList_item"]'):
-        nick_el = item.select_one('[class*="OpentalkList_nick-name"]')
-        text_el = item.select_one('[class*="OpentalkList_talk-text"]')
-        if nick_el and text_el:
-            nick = nick_el.text.strip()
-            txt = text_el.text.strip()
-            if txt and len(txt) >= 2:
-                opentalks.append({'nick': nick, 'text': txt})
-
-    for hot in soup.select('[class*="CuratedPostWrapper_article"]'):
-        t_el = hot.select_one('[class*="CuratedPostWrapper_title"]')
-        if not t_el:
-            continue
-        for b in t_el.select('.blind, svg'):
-            b.decompose()
-        title = "[HOT] " + t_el.text.strip()
-        if title in seen_titles:
-            continue
-        seen_titles.add(title)
-
-        d_el = hot.select_one('[class*="CuratedPostWrapper_description"]')
-        desc = d_el.text.strip() if d_el else ""
-        nick_el = hot.select_one('[class*="Profile_nickname"]')
-        if nick_el:
-            for b in nick_el.select('.blind'): b.decompose()
-        author = nick_el.text.strip() if nick_el else "주주"
-        time_el = hot.select_one('[class*="Profile_time"]')
-        if time_el:
-            for b in time_el.select('.blind'): b.decompose()
-        date = time_el.text.strip() if time_el else "최신"
-
-        btns = hot.select('button[class*="ReactionButton_article"]')
-        good = extract_slot_number(btns[0]) if len(btns) > 0 else "0"
-        bad = extract_slot_number(btns[1]) if len(btns) > 1 else "0"
-        cmt_el = hot.select_one('[class*="ReactionBox_text"]')
-        comments = f"[{cmt_el.text.strip()}]" if cmt_el and cmt_el.text.strip() else ""
-        cnt_el = hot.select_one('[class*="ReactionBox_area-count"]')
-        views = re.sub(r'[^0-9,]', '', cnt_el.text) if cnt_el else "-"
-        link_el = hot.select_one('a[class*="CuratedPostWrapper_link"]')
-        href = link_el.get('href', '') if link_el else f"/domestic/stock/{ticker_code}/discussion"
-        link = "https://m.stock.naver.com" + href if href.startswith('/') else href
-
-        posts.append({
-            'title': title, 'desc': desc, 'author': author, 'date': date,
-            'views': views, 'good': good, 'bad': bad, 'comments': comments, 'link': link
-        })
-
-    for post in soup.select('li[class*="DiscussionPostWrapper_article"]'):
-        t_el = post.select_one('[class*="UserPostContents_title"]')
-        if not t_el:
-            continue
-        title = t_el.text.strip()
-        if not title or title in seen_titles:
-            continue
-        seen_titles.add(title)
-
-        d_el = post.select_one('[class*="UserPostContents_description"]')
-        desc = d_el.get_text(" ", strip=True) if d_el else ""
-        nick_el = post.select_one('[class*="Profile_nickname"]')
-        if nick_el:
-            for b in nick_el.select('.blind'): b.decompose()
-        author = nick_el.text.strip() if nick_el else "주주"
-        time_el = post.select_one('[class*="Profile_time"]')
-        if time_el:
-            for b in time_el.select('.blind'): b.decompose()
-        date = time_el.text.strip() if time_el else "최신"
-
-        btns = post.select('button[class*="ReactionButton_article"]')
-        good = extract_slot_number(btns[0]) if len(btns) > 0 else "0"
-        bad = extract_slot_number(btns[1]) if len(btns) > 1 else "0"
-        cmt_el = post.select_one('[class*="ReactionBox_text"]')
-        comments = f"[{cmt_el.text.strip()}]" if cmt_el and cmt_el.text.strip() else ""
-        cnt_el = post.select_one('[class*="ReactionBox_area-count"]')
-        views = re.sub(r'[^0-9,]', '', cnt_el.text) if cnt_el else "-"
-        
-        post_id = post.get('id', '')
-        link_el = post.select_one('a[class*="DiscussionPostWrapper_link"]')
-        href = link_el.get('href', '') if link_el else (f"/domestic/stock/{ticker_code}/discussion/{post_id}" if post_id else f"/domestic/stock/{ticker_code}/discussion")
-        link = "https://m.stock.naver.com" + href if href.startswith('/') else href
-
-        posts.append({
-            'title': title, 'desc': desc, 'author': author, 'date': date,
-            'views': views, 'good': good, 'bad': bad, 'comments': comments, 'link': link
-        })
-
-    return posts, opentalks
-
-def get_naver_jongtobang(ticker_code="475560"):
-    posts, opentalks = [], []
-    urls_to_try = [
-        f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion",
-        f"https://m.stock.naver.com/front-api/discussion/list?discussionType=localStock&itemCode={ticker_code}&pageSize=20"
-    ]
-    headers = {**COMMON_HEADERS, 'Referer': f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion"}
-    for u in urls_to_try:
-        try:
-            res = requests.get(u, headers=headers, timeout=4.5)
-            if res.status_code != 200:
-                continue
-            text = decode_html(res)
-            if text.strip().startswith('{') or text.strip().startswith('['):
-                data = res.json()
-                found = []
-                def walk_json(obj):
-                    if isinstance(obj, dict):
-                        if ('title' in obj or 'subject' in obj) and ('discussionId' in obj or 'nid' in obj or 'readCount' in obj or 'viewCount' in obj):
-                            found.append(obj)
-                        else:
-                            for v in obj.values(): walk_json(v)
-                    elif isinstance(obj, list):
-                        for it in obj: walk_json(it)
-                walk_json(data)
-                for item in found[:20]:
-                    t = str(item.get('title') or item.get('subject') or '').strip()
-                    if not t: continue
-                    nid = item.get('discussionId') or item.get('nid') or item.get('articleId') or ''
+    def walk(obj):
+        if isinstance(obj, dict):
+            title = obj.get('title') or obj.get('subject')
+            has_meta = any(k in obj for k in (
+                'discussionId', 'nid', 'articleId', 'postId', 'readCount',
+                'viewCount', 'goodCount', 'recommendCount', 'sympathyCount',
+                'writerNickname', 'nickname', 'contents', 'summary'
+            ))
+            if isinstance(title, str) and len(title.strip()) >= 2 and has_meta:
+                nid = str(obj.get('discussionId') or obj.get('nid') or obj.get('articleId') or obj.get('postId') or obj.get('id') or title)
+                if nid not in seen_ids:
+                    seen_ids.add(nid)
+                    desc = str(obj.get('contents') or obj.get('summary') or obj.get('body') or obj.get('content') or '')
+                    desc = re.sub(r'<[^>]+>', ' ', desc).replace('\n', ' ').strip()[:100]
+                    author = str(obj.get('writerNickname') or obj.get('nickname') or obj.get('writerId') or obj.get('author') or '주주')
+                    date_raw = str(obj.get('date') or obj.get('writtenAt') or obj.get('regDate') or obj.get('createdAt') or '최신')
+                    date = date_raw[5:16].replace('-', '.') if len(date_raw) >= 16 else date_raw[:10]
+                    views = str(obj.get('readCount') or obj.get('viewCount') or obj.get('views') or '-')
+                    good = str(obj.get('goodCount') or obj.get('recommendCount') or obj.get('sympathyCount') or obj.get('likeCount') or '0')
+                    bad = str(obj.get('badCount') or obj.get('notRecommendCount') or obj.get('antipathyCount') or obj.get('dislikeCount') or '0')
+                    cmt = obj.get('commentCount') or obj.get('replyCount') or 0
+                    comments = f"[{cmt}]" if cmt else ""
+                    link = f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion/{nid}" if nid.isdigit() else f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion"
                     posts.append({
-                        'title': t,
-                        'desc': str(item.get('contents') or item.get('summary') or '').replace('\n', ' ')[:90],
-                        'author': str(item.get('writerNickname') or item.get('nickname') or '주주'),
-                        'date': str(item.get('date') or item.get('writtenAt') or '')[:10],
-                        'views': str(item.get('readCount') or item.get('viewCount') or '-'),
-                        'good': str(item.get('goodCount') or item.get('sympathyCount') or '0'),
-                        'bad': str(item.get('badCount') or item.get('antipathyCount') or '0'),
-                        'comments': f"[{item.get('commentCount')}]" if item.get('commentCount') else "",
-                        'link': f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion/{nid}"
+                        'title': title.strip(), 'desc': desc, 'author': author,
+                        'date': date, 'views': views, 'good': good, 'bad': bad,
+                        'comments': comments, 'link': link
                     })
             else:
-                p_list, ot_list = parse_npay_discussion_dom(text, ticker_code)
-                if p_list: posts.extend(p_list)
-                if ot_list: opentalks.extend(ot_list)
-            if posts:
-                break
+                for v in obj.values():
+                    walk(v)
+        elif isinstance(obj, list):
+            for it in obj:
+                walk(it)
+
+    walk(data)
+    return posts
+
+def get_naver_jongtobang(ticker_code="475560"):
+    posts = []
+    req_headers = {
+        **COMMON_HEADERS,
+        'Referer': f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion",
+        'Accept': 'application/json, text/plain, */*',
+        'X-Requested-With': 'XMLHttpRequest'
+    }
+
+    # 1단계: 네이버 증권 & Npay 토론방 후보 API 직접 호출
+    api_candidates = [
+        f"https://m.stock.naver.com/front-api/discussion/list?discussionType=localStock&itemCode={ticker_code}&pageSize=20",
+        f"https://m.stock.naver.com/front-api/v1/discussion/list?discussionType=localStock&itemCode={ticker_code}&pageSize=20",
+        f"https://m.stock.naver.com/front-api/discussion/posts?discussionType=localStock&itemCode={ticker_code}&pageSize=20",
+        f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?rsno=0&size=20",
+        f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?size=20"
+    ]
+    for url in api_candidates:
+        try:
+            res = requests.get(url, headers=req_headers, timeout=3)
+            if res.status_code == 200 and ('{' in res.text or '[' in res.text):
+                extracted = extract_posts_from_any_json(res.json(), ticker_code)
+                if extracted:
+                    return extracted[:20]
         except Exception:
             continue
 
-    if not posts and os.path.exists("theborn_naver.txt"):
+    # 2단계: Npay 토론방 페이지의 __NEXT_DATA__ 및 Next.js 웹팩 청크에서 API 경로 자동 역추적
+    disc_page_url = f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion"
+    try:
+        res = requests.get(disc_page_url, headers=COMMON_HEADERS, timeout=3.5)
+        if res.status_code == 200:
+            html_text = decode_html(res)
+            soup = BeautifulSoup(html_text, 'html.parser')
+
+            # 2-1. __NEXT_DATA__ 내부 검색
+            next_el = soup.select_one('script#__NEXT_DATA__')
+            if next_el and next_el.string:
+                extracted = extract_posts_from_any_json(json.loads(next_el.string), ticker_code)
+                if extracted:
+                    return extracted[:20]
+
+            # 2-2. Next.js discussion 청크 JS 파일 스캔하여 실제 API 엔드포인트 추출
+            chunk_urls = []
+            for sc in soup.select('script[src*="/_next/static/chunks/"]'):
+                src = sc.get('src', '')
+                if any(k in src for k in ['discussion', '78616', '95622', '21178', '70953']):
+                    chunk_urls.append(src if src.startswith('http') else "https://ssl.pstatic.net" + src)
+
+            discovered_apis = set()
+            for c_url in chunk_urls[:3]:
+                try:
+                    c_res = requests.get(c_url, headers=COMMON_HEADERS, timeout=2.5)
+                    if c_res.status_code == 200:
+                        for m in re.findall(r'["\'`](/(?:front-api|api)/[^"\'`\s]{4,90})["\'`]', c_res.text):
+                            if any(w in m.lower() for w in ['discuss', 'post', 'board', 'comment']):
+                                clean_p = re.sub(r'\$\{[^}]+\}', ticker_code, m)
+                                discovered_apis.add("https://m.stock.naver.com" + clean_p)
+                except Exception:
+                    continue
+
+            for d_api in list(discovered_apis)[:4]:
+                test_url = d_api if '?' in d_api else f"{d_api}?discussionType=localStock&itemCode={ticker_code}&code={ticker_code}&pageSize=20&size=20"
+                try:
+                    d_res = requests.get(test_url, headers=req_headers, timeout=2.5)
+                    if d_res.status_code == 200 and ('{' in d_res.text or '[' in d_res.text):
+                        extracted = extract_posts_from_any_json(d_res.json(), ticker_code)
+                        if extracted:
+                            return extracted[:20]
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    # 3단계: PC 구형 게시판 및 종목 메인 페이지(item/main.naver) SSR 영역 파싱
+    for pc_url in [
+        f"https://finance.naver.com/item/board.naver?code={ticker_code}",
+        f"https://finance.naver.com/item/main.naver?code={ticker_code}"
+    ]:
         try:
-            with open("theborn_naver.txt", "r", encoding="utf-8", errors="ignore") as f:
-                p_list, ot_list = parse_npay_discussion_dom(f.read(), ticker_code)
-                if p_list: posts = p_list
-                if ot_list: opentalks = ot_list
+            res = requests.get(pc_url, headers={**COMMON_HEADERS, 'Referer': 'https://finance.naver.com/'}, timeout=3)
+            soup = BeautifulSoup(decode_html(res), 'html.parser')
+            for a_el in soup.select('table.type2 td.title a, .section.new_bbs a[href*="board_read"], a[href*="discussion/"]'):
+                title = (a_el.get('title') or a_el.text or '').strip()
+                if not title or len(title) < 2:
+                    continue
+                href = a_el.get('href', '')
+                link = ("https://finance.naver.com" + href) if href.startswith('/item') else (
+                    ("https://m.stock.naver.com" + href) if href.startswith('/domestic') else href
+                )
+                row = a_el.find_parent('tr') or a_el.find_parent('li')
+                tds = row.select('td') if row else []
+                date = tds[0].text.strip() if len(tds) > 0 else '실시간'
+                views = tds[3].text.strip() if len(tds) > 3 else '-'
+                good = tds[4].text.strip() if len(tds) > 4 else '-'
+                bad = tds[5].text.strip() if len(tds) > 5 else '-'
+                posts.append({
+                    'title': title, 'desc': '', 'author': '주주',
+                    'date': date, 'views': views, 'good': good, 'bad': bad,
+                    'comments': '', 'link': link
+                })
+            if posts:
+                return posts[:20]
         except Exception:
-            pass
+            continue
 
-    if not posts:
-        posts = FALLBACK_JONGTO
-    if not opentalks:
-        opentalks = FALLBACK_OPENTALK
-
-    return posts[:20], opentalks[-8:]
+    # 서버 IP에서 차단될 경우 빈 리스트를 반환하여 브라우저(Client JS)가 실시간 페치하도록 위임
+    return []
 
 # --- 3. 뉴스 크롤링 & 우선순위 기반 정밀 분류기 ---
 STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
@@ -288,11 +271,9 @@ def extract_tokens(title):
     return {w for w in words if w not in STOP_WORDS}
 
 def classify_single_news(title):
-    # 1순위: 리스크 키워드가 하나라도 있으면 무조건 RISK (예: '미국서 줄 선다는데 국내는 휘청' -> RISK)
     for rk in NEWS_KEYWORDS["RISK"]:
         if rk in title:
             return 'RISK', f'🚨 쟁점·리스크 ({rk})'
-    # 2순위: 홍보/언플 키워드 매칭
     for pk in NEWS_KEYWORDS["PR"]:
         if pk in title:
             return 'PR', f'🎺 자본언플·홍보 ({pk})'
@@ -373,7 +354,7 @@ def get_latest_news():
             clusters.append({'main': item, 'tokens': tokens, 'dups': []})
 
     final_news = []
-    for cl in clusters[:24]:
+    for cl in clusters[:25]:
         main = cl['main']
         dups = cl['dups']
         all_titles_in_cluster = " ".join([main['pure_title']] + [d['pure_title'] for d in dups])
@@ -647,81 +628,7 @@ def fetch_single_channel(ch):
             })
     return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids}
 
-# --- 6. 자연어 명사 어간 추출기 ---
-IGNORE_WORDS = {
-    '백종원', '백종원이', '백종원의', '백종원씨', '더본', '더본코리아', '대표', '대표님', '갤주', '종팔이',
-    '진짜', '이거', '근황', '지금', '오늘', '오늘자', '최근', '현재', '그냥', '너무', '존나',
-    '새끼', '씨발', '시발', '병신', '싯팔새끼', '이새끼', '사람', '솔직히', '진지하게', '경고',
-    '속보', '다시보는', '명작', '이유', '한계', '명확한', '도와준', '비교', '진행상황', '유튭',
-    '댓글', '민심', '왜이럼', '생각', '이렇게', '모습', '보이는', '하는', '있는', '없는', '같음',
-    '있다', '없다', '되다', '하다', '이다', '같다', '보다', '오다', '가다', '주다', '알다', '모르다',
-    '하면', '되면', '오면', '가면', '보면', '치면', '쓰면', '알면', '있으면', '없으면', '나오면',
-    '얘기', '정도', '때문', '부분', '문제', '사실', '현황', '진격', '출점', '학인된', '어제', '내일',
-    'jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'dc', 'app', 'araboja', 'aravoja', 'feat', 'hot',
-    '유래', '음식', '사진', '영상', '최신', '방법', '하나', '리스트', '추천', '명언', '수급'
-}
-
-PREDICATE_PATTERN = re.compile(
-    r'(있다|없다|같다|되다|하다|이다|봤다|왔다|갔다|했다|됐다|난다|준다|본다|한다|된다|'
-    r'하면|되면|오면|가면|보면|치면|쓰면|알면|나면|주면|받으면|먹으면|'
-    r'겠냐|겠노|겠네|하노|하냐|하나|할까|볼까|하자|해라|마라|거임|건가|인듯|인가|구만|구나|던데|는데|길래|잖아|더라|봐유|애유|네유)$'
-)
-
-JOSA_PATTERN = re.compile(
-    r'(에서부터|으로부터|에서|으로|이랑|하고|부터|까지|마저|조차|에게|한테|처럼|보다|라고|이라|다는|라는|은|는|이|가|을|를|의|에|로|과|와|도|만|한|할|함|임)$'
-)
-
-def normalize_korean_noun(w):
-    w = w.lower()
-    w = re.sub(r'[ㄱ-ㅎㅏ-ㅣ]+', '', w)
-    if len(w) < 2 or w.isdigit() or w in IGNORE_WORDS:
-        return ''
-    if PREDICATE_PATTERN.search(w):
-        return ''
-    stemmed = JOSA_PATTERN.sub('', w)
-    if len(stemmed) >= 2:
-        w = stemmed
-    if PREDICATE_PATTERN.search(w) or w in IGNORE_WORDS:
-        return ''
-    if len(w) >= 3 and w.endswith(('군', '시', '점')) and not w.endswith(('장군', '교시', '폐점', '출점', '지점', '반점')):
-        w = w[:-1]
-    return w
-
-def extract_hot_keywords(dc_posts, jongto_posts, news_list):
-    raw_tokens = []
-    for p in dc_posts:
-        words = re.findall(r'[가-힣A-Za-z0-9]{2,}', p['title'])
-        post_stems = {normalize_korean_noun(w) for w in words}
-        raw_tokens.extend([s for s in post_stems if len(s) >= 2 and not re.match(r'^\d+[월일편명개년배위곳잔]$', s)])
-
-    for j in jongto_posts:
-        words = re.findall(r'[가-힣A-Za-z0-9]{2,}', j['title'])
-        post_stems = {normalize_korean_noun(w) for w in words}
-        raw_tokens.extend([s for s in post_stems if len(s) >= 2 and not re.match(r'^\d+[월일편명개년배위곳잔]$', s)])
-
-    for n in news_list:
-        clean_t = n['title'].rsplit(' - ', 1)[0]
-        words = re.findall(r'[가-힣A-Za-z0-9]{2,}', clean_t)
-        post_stems = {normalize_korean_noun(w) for w in words}
-        raw_tokens.extend([s for s in post_stems if len(s) >= 2 and not re.match(r'^\d+[월일편명개년배위곳잔만원호]$', s)])
-
-    freq = Counter(raw_tokens)
-    sorted_unique = sorted(freq.keys(), key=len)
-    merged_freq = Counter()
-    stem_map = {}
-
-    for word in sorted_unique:
-        mapped = word
-        for shorter in sorted_unique:
-            if shorter != word and len(shorter) >= 2 and word.startswith(shorter):
-                mapped = stem_map.get(shorter, shorter)
-                break
-        stem_map[word] = mapped
-        merged_freq[mapped] += freq[word]
-
-    return [(kw, cnt) for kw, cnt in merged_freq.most_common() if cnt >= 2][:12]
-
-# --- 7. HTML 문자열 생성 (병렬 수집 + 브라우저 실시간 키워드 매니저 연동) ---
+# --- 6. HTML 대시보드 생성 (레이더 & 뉴스 양방향 키워드 매니저 + 종토방 실시간 브라우저 페치) ---
 def generate_html_string():
     with ThreadPoolExecutor(max_workers=10) as executor:
         f_dc = executor.submit(get_dc_best_posts)
@@ -731,17 +638,20 @@ def generate_html_string():
         f_yt = [executor.submit(fetch_single_channel, ch) for ch in YOUTUBE_CHANNELS]
 
         dc_posts = f_dc.result()
-        jongto_posts, opentalk_msgs = f_jt.result()
+        jongto_posts = f_jt.result()
         news = f_news.result()
         stock = f_stock.result()
         youtube_data = [f.result() for f in f_yt]
 
-    hot_keywords = extract_hot_keywords(dc_posts, jongto_posts, news)
-    
     kst = timezone(timedelta(hours=9))
     current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H:%M:%S")
-    
-    kw_html = "".join([f"<span class='kw-badge'>#{kw} <b>{cnt}</b></span>" for kw, cnt in hot_keywords]) or "<span class='kw-badge'>#공통키워드집계중</span>"
+
+    # 브라우저 실시간 레이더 랭킹 연산을 위한 전체 제목 리스트 전달
+    all_titles_for_radar = (
+        [p['title'] for p in dc_posts if '실패' not in p['title']] +
+        [j['title'] for j in jongto_posts] +
+        [n['title'].rsplit(' - ', 1)[0] for n in news if '실패' not in n['title']]
+    )
 
     dc_html = ""
     for p in dc_posts:
@@ -752,20 +662,17 @@ def generate_html_string():
         </li>
         """
 
-    ot_html = ""
-    for ot in opentalk_msgs:
-        ot_html += f"<div class='ot-msg'><span class='ot-nick'>{ot['nick']}</span> {ot['text']}</div>"
-
     jt_html = ""
-    for j in jongto_posts:
-        desc_div = f"<div class='jt-desc'>{j['desc']}</div>" if j.get('desc') else ""
-        jt_html += f"""
-        <li>
-            <div class="meta-line">{j['date']} | {j.get('author', '주주')} | 조회 {j['views']} | <span style="color:#ff8a65;">👍 {j['good']}</span> · <span style="color:#90caf9;">👎 {j['bad']}</span></div>
-            <a href="{j['link']}" target="_blank" style="font-weight:bold;">{j['title']} <span style="color:#ffd54f;">{j['comments']}</span></a>
-            {desc_div}
-        </li>
-        """
+    if jongto_posts:
+        for j in jongto_posts:
+            desc_div = f"<div class='jt-desc'>{j['desc']}</div>" if j.get('desc') else ""
+            jt_html += f"""
+            <li>
+                <div class="meta-line">{j['date']} | {j.get('author', '주주')} | 조회 {j['views']} | <span style="color:#ff8a65;">👍 {j['good']}</span> · <span style="color:#90caf9;">👎 {j['bad']}</span></div>
+                <a href="{j['link']}" target="_blank" style="font-weight:bold;">{j['title']} <span style="color:#ffd54f;">{j['comments']}</span></a>
+                {desc_div}
+            </li>
+            """
 
     news_html = ""
     for n in news:
@@ -816,7 +723,10 @@ def generate_html_string():
         else:
             yt_official_html += block
 
-    default_kw_json = json.dumps(NEWS_KEYWORDS, ensure_ascii=False)
+    default_news_kw_json = json.dumps(NEWS_KEYWORDS, ensure_ascii=False)
+    default_radar_kw_json = json.dumps(RADAR_KEYWORDS, ensure_ascii=False)
+    raw_titles_json = json.dumps(all_titles_for_radar, ensure_ascii=False)
+    has_server_jt = "true" if jongto_posts else "false"
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -845,10 +755,16 @@ def generate_html_string():
         h1 {{ color: var(--accent-red); margin: 0; font-size: 1.9em; letter-spacing: -0.5px; }}
         .update-time {{ font-size: 0.9em; color: var(--text-muted); }}
 
-        .radar-bar {{ max-width: 1700px; margin: 0 auto 20px auto; background: #14171f; border: 1px solid var(--border-color); border-radius: 10px; padding: 12px 18px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }}
-        .radar-title {{ color: var(--accent-gold); font-weight: bold; font-size: 0.95em; margin-right: 6px; }}
-        .kw-badge {{ background: #232834; color: #d0d7de; padding: 5px 11px; border-radius: 20px; font-size: 0.85em; border: 1px solid #343b4a; }}
-        .kw-badge b {{ color: var(--accent-red); margin-left: 3px; }}
+        /* 상단 실시간 이슈 핵심 명사 레이더 바 */
+        .radar-wrapper {{ max-width: 1700px; margin: 0 auto 20px auto; }}
+        .radar-bar {{ background: #14171f; border: 1px solid var(--border-color); border-radius: 10px; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }}
+        .radar-left {{ display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 1; }}
+        .radar-title {{ color: var(--accent-gold); font-weight: bold; font-size: 0.95em; margin-right: 4px; }}
+        .kw-badge {{ background: #232834; color: #d0d7de; padding: 5px 11px; border-radius: 20px; font-size: 0.85em; border: 1px solid #343b4a; display: inline-flex; align-items: center; gap: 5px; }}
+        .kw-badge.boosted {{ border-color: rgba(255, 213, 79, 0.5); background: rgba(255, 213, 79, 0.08); }}
+        .kw-badge b {{ color: var(--accent-red); }}
+        .kw-ban-x {{ color: #768390; cursor: pointer; font-size: 0.9em; margin-left: 2px; padding: 0 2px; }}
+        .kw-ban-x:hover {{ color: #ff5252; font-weight: bold; }}
 
         .container {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1700px; margin: 0 auto; }}
         @media (max-width: 1200px) {{ .container {{ grid-template-columns: 1fr 1fr; }} }}
@@ -875,10 +791,10 @@ def generate_html_string():
         .tab-btn {{ background: #232834; color: #aaa; border: 1px solid #343b4a; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8em; font-weight: bold; }}
         .tab-btn.active {{ background: var(--accent-blue); color: #000; border-color: var(--accent-blue); }}
 
-        /* 뉴스 키워드 매니저 전용 스타일 */
-        .kw-mgr-btn {{ background: #262c3a; color: var(--accent-gold); border: 1px solid #3d4659; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.75em; font-weight: bold; }}
+        /* 키워드 매니저 공통 스타일 */
+        .kw-mgr-btn {{ background: #262c3a; color: var(--accent-gold); border: 1px solid #3d4659; padding: 5px 11px; border-radius: 6px; cursor: pointer; font-size: 0.78em; font-weight: bold; flex-shrink: 0; }}
         .kw-mgr-btn:hover {{ background: #323a4d; }}
-        .kw-manager-panel {{ display: none; background: #12151c; border: 1px solid #343b4a; border-radius: 8px; padding: 14px; margin-bottom: 14px; }}
+        .kw-manager-panel {{ display: none; background: #12151c; border: 1px solid #343b4a; border-radius: 8px; padding: 14px; margin-top: 10px; margin-bottom: 14px; }}
         .kw-sec-title {{ font-size: 0.8em; font-weight: bold; margin: 10px 0 6px 0; display: flex; justify-content: space-between; align-items: center; }}
         .kw-sec-title:first-child {{ margin-top: 0; }}
         .kw-input-row {{ display: flex; gap: 6px; margin-bottom: 8px; }}
@@ -887,7 +803,7 @@ def generate_html_string():
         .kw-tag-wrap {{ display: flex; flex-wrap: wrap; gap: 5px; max-height: 95px; overflow-y: auto; padding: 4px 0; }}
         .kw-edit-tag {{ padding: 2px 7px; border-radius: 4px; font-size: 0.75em; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; user-select: none; }}
         .kw-edit-tag:hover {{ opacity: 0.8; text-decoration: line-through; }}
-        .kw-mgr-footer {{ display: flex; justify-content: space-between; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #2a2f3a; }}
+        .kw-mgr-footer {{ display: flex; justify-content: space-between; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #2a2f3a; flex-wrap: wrap; }}
 
         .chart-img {{ width: 100%; border-radius: 8px; filter: invert(0.9) hue-rotate(180deg); border: 1px solid #333; }}
 
@@ -898,17 +814,12 @@ def generate_html_string():
         .scroll-list li:last-child {{ border-bottom: none; }}
         .meta-line {{ font-size: 0.8em; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }}
 
-        .opentalk-box {{ background: #12141a; border: 1px solid #283040; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; max-height: 155px; overflow-y: auto; }}
-        .ot-header {{ font-size: 0.8em; color: var(--accent-gold); font-weight: bold; margin-bottom: 6px; display: flex; justify-content: space-between; }}
-        .ot-msg {{ font-size: 0.83em; padding: 3px 0; border-bottom: 1px dashed #1f2430; color: #d0d7de; }}
-        .ot-msg:last-child {{ border-bottom: none; }}
-        .ot-nick {{ color: var(--accent-blue); font-weight: bold; margin-right: 6px; }}
         .jt-desc {{ font-size: 0.83em; color: #9ea7b3; margin-top: 4px; line-height: 1.35; }}
 
         .n-badge {{ padding: 2px 6px; border-radius: 4px; font-size: 0.75em; font-weight: bold; }}
         .badge-risk {{ background: rgba(255, 82, 82, 0.2); color: #ff5252; border: 1px solid rgba(255, 82, 82, 0.4); }}
         .badge-pr {{ background: rgba(255, 213, 79, 0.15); color: #ffd54f; border: 1px solid rgba(255, 213, 79, 0.4); }}
-        .badge-gen {{ background: rgba(79, 195, 247, 0.15); color: #4fc3f7; }}
+        .badge-gen {{ background: rgba(79, 195, 247, 0.15); color: #4fc3f7; border: 1px solid rgba(79, 195, 247, 0.3); }}
 
         .channel-name {{ margin: 18px 0 10px 0; padding-bottom: 5px; border-bottom: 1px dashed #333; }}
         .channel-name:first-child {{ margin-top: 0; }}
@@ -930,9 +841,40 @@ def generate_html_string():
         <div class="update-time">마지막 업데이트: {current_time}</div>
     </div>
 
-    <div class="radar-bar">
-        <span class="radar-title">🔥 실시간 이슈 핵심 명사 (2회 이상 중복):</span>
-        {kw_html}
+    <!-- 실시간 이슈 핵심 명사 레이더 바 + 수동 키워드 설정 패널 -->
+    <div class="radar-wrapper">
+        <div class="radar-bar">
+            <div class="radar-left">
+                <span class="radar-title">🔥 실시간 이슈 핵심 명사 (× 클릭 시 즉시 제외):</span>
+                <span id="radarBadgesContainer" style="display:contents;"></span>
+            </div>
+            <button class="kw-mgr-btn" onclick="togglePanel('radarManagerPanel')">⚙️ 핵심명사 관리</button>
+        </div>
+
+        <div id="radarManagerPanel" class="kw-manager-panel">
+            <div class="kw-sec-title" style="color:#ffd54f;">
+                <span>📌 우선 추출·보존 핵심 명사 (복합명사 쪼개짐 방지 · 클릭 시 삭제)</span>
+            </div>
+            <div class="kw-input-row">
+                <input type="text" id="inputRadarBoost" class="kw-input" placeholder="우선 추출할 핵심 명사 입력 (예: 우지커피, 당근페이, 순감소)" onkeydown="if(event.key==='Enter') addRadarKw('BOOST')">
+                <button class="kw-add-btn" onclick="addRadarKw('BOOST')">+ 추가</button>
+            </div>
+            <div id="tagsRadarBoost" class="kw-tag-wrap"></div>
+
+            <div class="kw-sec-title" style="color:#ff5252;">
+                <span>🚫 레이더 랭킹 제외 불용어 (포함 시 랭킹에서 즉시 숨김 · 클릭 시 복원)</span>
+            </div>
+            <div class="kw-input-row">
+                <input type="text" id="inputRadarStop" class="kw-input" placeholder="랭킹에서 뺄 단어 입력 (예: 근데, 브랜드, 식당)" onkeydown="if(event.key==='Enter') addRadarKw('STOP')">
+                <button class="kw-add-btn" onclick="addRadarKw('STOP')">+ 제외 추가</button>
+            </div>
+            <div id="tagsRadarStop" class="kw-tag-wrap"></div>
+
+            <div class="kw-mgr-footer">
+                <button class="kw-add-btn" style="background:#1f2937; color:#9ca3af;" onclick="resetRadarDefault()">↺ 명사 설정 초기화</button>
+                <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="copyAllPythonConfig()">📋 전체 파이썬 설정 코드 복사 (NEWS + RADAR)</button>
+            </div>
+        </div>
     </div>
 
     <div class="container">
@@ -987,17 +929,16 @@ def generate_html_string():
         <div class="card">
             <h2>
                 <span>📰 실시간 뉴스 판독기</span>
-                <button class="kw-mgr-btn" onclick="toggleKwManager()">⚙️ 키워드 관리</button>
+                <button class="kw-mgr-btn" onclick="togglePanel('kwManagerPanel')">⚙️ 키워드 관리</button>
             </h2>
 
-            <!-- 브라우저 내장 키워드 추가/삭제 패널 -->
-            <div id="kwManagerPanel" class="kw-manager-panel">
+            <div id="kwManagerPanel" class="kw-manager-panel" style="margin-top:0;">
                 <div class="kw-sec-title" style="color:#ff5252;">
                     <span>🚨 쟁점·리스크 키워드 (최우선 적용 · 클릭 시 삭제)</span>
                 </div>
                 <div class="kw-input-row">
-                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 휘청, 급감, 태극기)" onkeydown="if(event.key==='Enter') addKw('RISK')">
-                    <button class="kw-add-btn" onclick="addKw('RISK')">+ 추가</button>
+                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 휘청, 급감, 태극기)" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
+                    <button class="kw-add-btn" onclick="addNewsKw('RISK')">+ 추가</button>
                 </div>
                 <div id="tagsRisk" class="kw-tag-wrap"></div>
 
@@ -1005,8 +946,8 @@ def generate_html_string():
                     <span>🎺 자본언플·홍보 키워드 (클릭 시 삭제)</span>
                 </div>
                 <div class="kw-input-row">
-                    <input type="text" id="inputPrKw" class="kw-input" placeholder="언플 단어 입력 (예: 승부수, 뚫는다, 시연)" onkeydown="if(event.key==='Enter') addKw('PR')">
-                    <button class="kw-add-btn" onclick="addKw('PR')">+ 추가</button>
+                    <input type="text" id="inputPrKw" class="kw-input" placeholder="언플 단어 입력 (예: 승부수, 뚫는다, 시연)" onkeydown="if(event.key==='Enter') addNewsKw('PR')">
+                    <button class="kw-add-btn" onclick="addNewsKw('PR')">+ 추가</button>
                 </div>
                 <div id="tagsPr" class="kw-tag-wrap"></div>
 
@@ -1014,14 +955,14 @@ def generate_html_string():
                     <span>🚫 스팸·목록 제외 키워드 (포함 시 뉴스 숨김)</span>
                 </div>
                 <div class="kw-input-row">
-                    <input type="text" id="inputSpamKw" class="kw-input" placeholder="제외할 단어 입력" onkeydown="if(event.key==='Enter') addKw('SPAM')">
-                    <button class="kw-add-btn" onclick="addKw('SPAM')">+ 추가</button>
+                    <input type="text" id="inputSpamKw" class="kw-input" placeholder="제외할 단어 입력" onkeydown="if(event.key==='Enter') addNewsKw('SPAM')">
+                    <button class="kw-add-btn" onclick="addNewsKw('SPAM')">+ 추가</button>
                 </div>
                 <div id="tagsSpam" class="kw-tag-wrap"></div>
 
                 <div class="kw-mgr-footer">
-                    <button class="kw-add-btn" style="background:#1f2937; color:#9ca3af;" onclick="resetKwDefault()">↺ 기본값 초기화</button>
-                    <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="copyPythonConfig()">📋 파이썬 코드 복사</button>
+                    <button class="kw-add-btn" style="background:#1f2937; color:#9ca3af;" onclick="resetNewsDefault()">↺ 뉴스 설정 초기화</button>
+                    <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="copyAllPythonConfig()">📋 전체 파이썬 설정 코드 복사</button>
                 </div>
             </div>
 
@@ -1058,53 +999,185 @@ def generate_html_string():
         </div>
 
         <div class="card">
-            <h2>🤬 네이버 종토방 & 주주오픈톡 (정솔 검열구역)</h2>
-            <div class="opentalk-box">
-                <div class="ot-header">
-                    <span>💬 실시간 주주오픈톡 하이라이트</span>
-                    <a href="https://m.stock.naver.com/domestic/stock/475560/discussion" target="_blank" style="color:#4fc3f7; font-size:0.95em;">전체보기 ↗</a>
-                </div>
-                {ot_html}
-            </div>
-            <ul class="scroll-list" style="max-height: 420px;">
+            <h2>
+                <span>🤬 네이버 종토방 실시간 민심</span>
+                <a href="https://m.stock.naver.com/domestic/stock/475560/discussion" target="_blank" style="font-size:0.75em; color:#ffd54f;">Npay 토론방 ↗</a>
+            </h2>
+            <div id="jtStatusBanner" style="font-size:0.8em; color:#8b949e; margin-bottom:8px;"></div>
+            <ul class="scroll-list" id="jongtoList" style="max-height: 560px;">
                 {jt_html}
             </ul>
         </div>
     </div>
 
     <script>
-        const DEFAULT_KEYWORDS = {default_kw_json};
-        const STORAGE_KEY = 'theborn_custom_news_keywords_v5';
-        let currentFilter = 'ALL';
-        let userKeywords = loadKeywords();
+        const DEFAULT_NEWS_KW = {default_news_kw_json};
+        const DEFAULT_RADAR_KW = {default_radar_kw_json};
+        const RAW_TITLES = {raw_titles_json};
+        const HAS_SERVER_JT = {has_server_jt};
 
-        function loadKeywords() {{
+        const NEWS_STORAGE_KEY = 'theborn_news_kw_v6';
+        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v6';
+
+        let currentFilter = 'ALL';
+        let userNewsKw = loadStored(NEWS_STORAGE_KEY, DEFAULT_NEWS_KW);
+        let userRadarKw = loadStored(RADAR_STORAGE_KEY, DEFAULT_RADAR_KW);
+
+        function loadStored(key, fallbackObj) {{
             try {{
-                const saved = localStorage.getItem(STORAGE_KEY);
-                if (saved) {{
-                    const parsed = JSON.parse(saved);
-                    if (parsed.RISK && parsed.PR && parsed.SPAM) return parsed;
-                }}
+                const saved = localStorage.getItem(key);
+                if (saved) return JSON.parse(saved);
             }} catch (e) {{}}
-            return JSON.parse(JSON.stringify(DEFAULT_KEYWORDS));
+            return JSON.parse(JSON.stringify(fallbackObj));
         }}
 
-        function saveKeywords() {{
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(userKeywords));
-            renderKwTags();
+        function togglePanel(id) {{
+            const el = document.getElementById(id);
+            el.style.display = (el.style.display === 'block') ? 'none' : 'block';
+        }}
+
+        // --- 1. 실시간 이슈 핵심 명사(레이더) 랭킹 엔진 ---
+        const JOSA_REGEX = /(에서부터|으로부터|에서|으로|이랑|하고|부터|까지|마저|조차|에게|한테|처럼|보다|라고|이라|다는|라는|은|는|이|가|을|를|의|에|로|과|와|도|만|한|할|함|임)$/;
+        const PRED_REGEX = /(있다|없다|같다|되다|하다|이다|봤다|왔다|갔다|했다|됐다|난다|준다|본다|한다|된다|하면|되면|오면|가면|보면|치면|쓰면|알면|나면|주면|받으면|먹으면|겠냐|겠노|겠네|하노|하냐|하나|할까|볼까|하자|해라|마라|거임|건가|인듯|인가|구만|구나|던데|는데|길래|잖아|더라|봐유|애유|네유|햇네|했네)$/;
+
+        function normalizeNoun(word, stopSet, boostList) {{
+            let w = word.toLowerCase().replace(/[ㄱ-ㅎㅏ-ㅣ]+/g, '');
+            if (w.length < 2 || /^\\d+$/.test(w) || /^\\d+[월일편명개년배위곳잔만원호%]+$/.test(w)) return '';
+            if (stopSet.has(w) || PRED_REGEX.test(w)) return '';
+
+            // 우선 추출(BOOST) 명사가 단어 시작부에 포함되어 있으면 원형 그대로 보존
+            for (const bw of boostList) {{
+                const bLow = bw.toLowerCase();
+                if (w === bLow || (w.startsWith(bLow) && w.length <= bLow.length + 2)) {{
+                    return bw;
+                }}
+            }}
+
+            let stemmed = w.replace(JOSA_REGEX, '');
+            if (stemmed.length >= 2) w = stemmed;
+            if (stopSet.has(w) || PRED_REGEX.test(w)) return '';
+            if (w.length >= 3 && (w.endsWith('군') || w.endsWith('시') || w.endsWith('점')) && !/(장군|교시|폐점|출점|지점|반점)$/.test(w)) {{
+                w = w.slice(0, -1);
+            }}
+            return stopSet.has(w) ? '' : w;
+        }}
+
+        function recomputeRadarKeywords() {{
+            const stopSet = new Set(userRadarKw.STOP.map(s => s.toLowerCase()));
+            const boostList = userRadarKw.BOOST || [];
+            const boostSet = new Set(boostList.map(b => b.toLowerCase()));
+            const freq = {{}};
+
+            RAW_TITLES.forEach(title => {{
+                const perTitleSet = new Set();
+                // 1) 우선 추출(BOOST) 명사 직접 매칭
+                boostList.forEach(bw => {{
+                    if (title.toLowerCase().includes(bw.toLowerCase()) && !stopSet.has(bw.toLowerCase())) {{
+                        perTitleSet.add(bw);
+                    }}
+                }});
+                // 2) 일반 어절 형태소 정규화 추출
+                const matches = title.match(/[가-힣A-Za-z0-9]{{2,}}/g) || [];
+                matches.forEach(rawW => {{
+                    const norm = normalizeNoun(rawW, stopSet, boostList);
+                    if (norm && norm.length >= 2) perTitleSet.add(norm);
+                }});
+                perTitleSet.forEach(token => {{
+                    freq[token] = (freq[token] || 0) + 1;
+                }});
+            }});
+
+            // 접두사 병합 (짧은 핵심 명사로 통합)
+            const keys = Object.keys(freq).sort((a, b) => a.length - b.length);
+            const merged = {{}};
+            const stemMap = {{}};
+            keys.forEach(word => {{
+                let target = word;
+                for (const shorter of keys) {{
+                    if (shorter !== word && shorter.length >= 2 && word.toLowerCase().startsWith(shorter.toLowerCase())) {{
+                        target = stemMap[shorter] || shorter;
+                        break;
+                    }}
+                }}
+                stemMap[word] = target;
+                merged[target] = (merged[target] || 0) + freq[word];
+            }});
+
+            const sorted = Object.entries(merged)
+                .filter(([_, cnt]) => cnt >= 2)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 12);
+
+            const container = document.getElementById('radarBadgesContainer');
+            if (!sorted.length) {{
+                container.innerHTML = "<span class='kw-badge'>#집계된중복명사없음</span>";
+                return;
+            }}
+            container.innerHTML = sorted.map(([kw, cnt]) => {{
+                const isBoost = boostSet.has(kw.toLowerCase());
+                return `<span class="kw-badge ${{isBoost ? 'boosted' : ''}}">
+                    #${{kw}} <b>${{cnt}}</b>
+                    <span class="kw-ban-x" title="'${{kw}}' 키워드를 레이더에서 즉시 제외" onclick="banRadarWord('${{kw}}')">×</span>
+                </span>`;
+            }}).join('');
+        }}
+
+        function banRadarWord(word) {{
+            if (!userRadarKw.STOP.includes(word)) {{
+                userRadarKw.STOP.unshift(word);
+                saveRadarKw();
+            }}
+        }}
+
+        function saveRadarKw() {{
+            localStorage.setItem(RADAR_STORAGE_KEY, JSON.stringify(userRadarKw));
+            renderRadarTags();
+            recomputeRadarKeywords();
+        }}
+
+        function renderRadarTags() {{
+            document.getElementById('tagsRadarBoost').innerHTML = userRadarKw.BOOST.map((kw, idx) =>
+                `<span class="kw-edit-tag badge-pr" title="클릭하여 삭제" onclick="removeRadarKw('BOOST', ${{idx}})">${{kw}} ×</span>`
+            ).join('');
+            document.getElementById('tagsRadarStop').innerHTML = userRadarKw.STOP.map((kw, idx) =>
+                `<span class="kw-edit-tag badge-risk" title="클릭하여 제외 해제" onclick="removeRadarKw('STOP', ${{idx}})">${{kw}} ×</span>`
+            ).join('');
+        }}
+
+        function addRadarKw(type) {{
+            const input = document.getElementById(type === 'BOOST' ? 'inputRadarBoost' : 'inputRadarStop');
+            const raw = input.value.trim();
+            if (!raw) return;
+            raw.split(',').map(s => s.trim()).filter(Boolean).forEach(w => {{
+                if (!userRadarKw[type].includes(w)) userRadarKw[type].unshift(w);
+            }});
+            input.value = '';
+            saveRadarKw();
+        }}
+
+        function removeRadarKw(type, idx) {{
+            userRadarKw[type].splice(idx, 1);
+            saveRadarKw();
+        }}
+
+        function resetRadarDefault() {{
+            localStorage.removeItem(RADAR_STORAGE_KEY);
+            userRadarKw = JSON.parse(JSON.stringify(DEFAULT_RADAR_KW));
+            renderRadarTags();
+            recomputeRadarKeywords();
+        }}
+
+        // --- 2. 뉴스 키워드 분류 엔진 ---
+        function saveNewsKw() {{
+            localStorage.setItem(NEWS_STORAGE_KEY, JSON.stringify(userNewsKw));
+            renderNewsTags();
             reclassifyAllNews();
         }}
 
-        function toggleKwManager() {{
-            const panel = document.getElementById('kwManagerPanel');
-            panel.style.display = (panel.style.display === 'block') ? 'none' : 'block';
-        }}
-
-        function renderKwTags() {{
+        function renderNewsTags() {{
             const renderGroup = (type, elId, cls) => {{
-                const container = document.getElementById(elId);
-                container.innerHTML = userKeywords[type].map((kw, idx) =>
-                    `<span class="kw-edit-tag ${{cls}}" title="클릭하여 삭제" onclick="removeKw('${{type}}', ${{idx}})">${{kw}} ×</span>`
+                document.getElementById(elId).innerHTML = userNewsKw[type].map((kw, idx) =>
+                    `<span class="kw-edit-tag ${{cls}}" title="클릭하여 삭제" onclick="removeNewsKw('${{type}}', ${{idx}})">${{kw}} ×</span>`
                 ).join('');
             }};
             renderGroup('RISK', 'tagsRisk', 'badge-risk');
@@ -1112,37 +1185,28 @@ def generate_html_string():
             renderGroup('SPAM', 'tagsSpam', 'badge-gen');
         }}
 
-        function addKw(type) {{
+        function addNewsKw(type) {{
             const inputId = type === 'RISK' ? 'inputRiskKw' : (type === 'PR' ? 'inputPrKw' : 'inputSpamKw');
             const input = document.getElementById(inputId);
             const raw = input.value.trim();
             if (!raw) return;
             raw.split(',').map(s => s.trim()).filter(Boolean).forEach(word => {{
-                if (!userKeywords[type].includes(word)) {{
-                    userKeywords[type].unshift(word);
-                }}
+                if (!userNewsKw[type].includes(word)) userNewsKw[type].unshift(word);
             }});
             input.value = '';
-            saveKeywords();
+            saveNewsKw();
         }}
 
-        function removeKw(type, idx) {{
-            userKeywords[type].splice(idx, 1);
-            saveKeywords();
+        function removeNewsKw(type, idx) {{
+            userNewsKw[type].splice(idx, 1);
+            saveNewsKw();
         }}
 
-        function resetKwDefault() {{
-            localStorage.removeItem(STORAGE_KEY);
-            userKeywords = JSON.parse(JSON.stringify(DEFAULT_KEYWORDS));
-            renderKwTags();
+        function resetNewsDefault() {{
+            localStorage.removeItem(NEWS_STORAGE_KEY);
+            userNewsKw = JSON.parse(JSON.stringify(DEFAULT_NEWS_KW));
+            renderNewsTags();
             reclassifyAllNews();
-        }}
-
-        function copyPythonConfig() {{
-            const pyCode = "NEWS_KEYWORDS = " + JSON.stringify(userKeywords, null, 4);
-            navigator.clipboard.writeText(pyCode).then(() => {{
-                alert("✅ 파이썬 설정 코드가 클립보드에 복사되었습니다!\\nmonitor.py / api/index.py 상단의 NEWS_KEYWORDS 부분에 그대로 붙여넣으시면 됩니다.");
-            }});
         }}
 
         function reclassifyAllNews() {{
@@ -1152,8 +1216,7 @@ def generate_html_string():
                 const dupCnt = parseInt(li.getAttribute('data-dups') || '0', 10);
                 const totalCnt = 1 + dupCnt;
 
-                // 1순위: 스팸/제외 키워드 포함 시 숨김
-                if (userKeywords.SPAM.some(sp => rawTitle.includes(sp))) {{
+                if (userNewsKw.SPAM.some(sp => rawTitle.includes(sp))) {{
                     li.setAttribute('data-cat', 'SPAM');
                     li.style.display = 'none';
                     return;
@@ -1161,10 +1224,9 @@ def generate_html_string():
 
                 let cat = 'GEN';
                 let label = '📰 일반동향';
-                let matchedRisk = userKeywords.RISK.find(rk => rawTitle.includes(rk));
-                let matchedPr = userKeywords.PR.find(pk => rawTitle.includes(pk));
+                let matchedRisk = userNewsKw.RISK.find(rk => rawTitle.includes(rk));
+                let matchedPr = userNewsKw.PR.find(pk => rawTitle.includes(pk));
 
-                // 2순위: 리스크 키워드 매칭 (언플보다 무조건 우선)
                 if (matchedRisk) {{
                     cat = 'RISK';
                     label = totalCnt >= 2 ? `🚨 쟁점 확산 (${{totalCnt}}건 · ${{matchedRisk}})` : `🚨 쟁점·리스크 (${{matchedRisk}})`;
@@ -1200,6 +1262,100 @@ def generate_html_string():
             }});
         }}
 
+        function copyAllPythonConfig() {{
+            const pyCode = "NEWS_KEYWORDS = " + JSON.stringify(userNewsKw, null, 4) +
+                           "\\n\\nRADAR_KEYWORDS = " + JSON.stringify(userRadarKw, null, 4);
+            navigator.clipboard.writeText(pyCode).then(() => {{
+                alert("✅ NEWS_KEYWORDS 및 RADAR_KEYWORDS 파이썬 코드가 복사되었습니다!\\n코드 최상단 설정 구역에 그대로 붙여넣으시면 됩니다.");
+            }});
+        }}
+
+        // --- 3. 네이버 종토방 클라이언트 실시간 페치 (서버 IP 차단 시 브라우저가 직접 수집) ---
+        async function fetchJongtoFromBrowser() {{
+            if (HAS_SERVER_JT) return;
+            const banner = document.getElementById('jtStatusBanner');
+            const listEl = document.getElementById('jongtoList');
+            banner.textContent = "🔄 브라우저에서 네이버 종토방 실시간 데이터를 불러오는 중...";
+
+            const targetApis = [
+                "https://m.stock.naver.com/api/discuss/localStock/475560?rsno=0&size=20",
+                "https://m.stock.naver.com/front-api/discussion/list?discussionType=localStock&itemCode=475560&pageSize=20",
+                "https://finance.naver.com/item/main.naver?code=475560"
+            ];
+            const proxies = [
+                url => `https://api.allorigins.win/raw?url=${{encodeURIComponent(url)}}`,
+                url => `https://api.codetabs.com/v1/proxy?quest=${{encodeURIComponent(url)}}`
+            ];
+
+            for (const api of targetApis) {{
+                for (const makeProxy of proxies) {{
+                    try {{
+                        const res = await fetch(makeProxy(api));
+                        if (!res.ok) continue;
+                        const text = await res.text();
+
+                        if (text.trim().startsWith('{{') || text.trim().startsWith('[')) {{
+                            const data = JSON.parse(text);
+                            const posts = [];
+                            const walk = (obj) => {{
+                                if (!obj || typeof obj !== 'object') return;
+                                if (Array.isArray(obj)) {{ obj.forEach(walk); return; }}
+                                const t = obj.title || obj.subject;
+                                if (typeof t === 'string' && t.length >= 2 && (obj.discussionId || obj.nid || obj.readCount !== undefined || obj.viewCount !== undefined)) {{
+                                    posts.push(obj);
+                                }} else {{
+                                    Object.values(obj).forEach(walk);
+                                }}
+                            }};
+                            walk(data);
+                            if (posts.length > 0) {{
+                                banner.textContent = "✅ 실시간 연동 완료";
+                                listEl.innerHTML = posts.slice(0, 20).map(p => {{
+                                    const nid = p.discussionId || p.nid || p.articleId || '';
+                                    const title = p.title || p.subject;
+                                    const desc = (p.contents || p.summary || '').replace(/<[^>]+>/g, ' ').slice(0, 95);
+                                    const date = String(p.date || p.writtenAt || '실시간').slice(0, 16);
+                                    const views = p.readCount ?? p.viewCount ?? '-';
+                                    const good = p.goodCount ?? p.recommendCount ?? p.sympathyCount ?? 0;
+                                    const bad = p.badCount ?? p.notRecommendCount ?? p.antipathyCount ?? 0;
+                                    const cmt = p.commentCount ? `[${{p.commentCount}}]` : '';
+                                    const link = nid ? `https://m.stock.naver.com/domestic/stock/475560/discussion/${{nid}}` : `https://m.stock.naver.com/domestic/stock/475560/discussion`;
+                                    RAW_TITLES.push(title);
+                                    return `<li>
+                                        <div class="meta-line">${{date}} | 조회 ${{views}} | <span style="color:#ff8a65;">👍 ${{good}}</span> · <span style="color:#90caf9;">👎 ${{bad}}</span></div>
+                                        <a href="${{link}}" target="_blank" style="font-weight:bold;">${{title}} <span style="color:#ffd54f;">${{cmt}}</span></a>
+                                        ${{desc ? `<div class="jt-desc">${{desc}}</div>` : ''}}
+                                    </li>`;
+                                }}).join('');
+                                recomputeRadarKeywords();
+                                return;
+                            }}
+                        }} else if (text.includes('board_read.naver')) {{
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(text, 'text/html');
+                            const links = Array.from(doc.querySelectorAll('a[href*="board_read.naver"]'));
+                            if (links.length > 0) {{
+                                banner.textContent = "✅ 네이버 증권 메인 실시간 연동 완료";
+                                listEl.innerHTML = links.slice(0, 15).map(a => {{
+                                    const title = a.getAttribute('title') || a.textContent.trim();
+                                    const href = a.getAttribute('href');
+                                    const link = href.startsWith('http') ? href : `https://finance.naver.com${{href}}`;
+                                    RAW_TITLES.push(title);
+                                    return `<li>
+                                        <div class="meta-line">실시간 종토방</div>
+                                        <a href="${{link}}" target="_blank" style="font-weight:bold;">${{title}}</a>
+                                    </li>`;
+                                }}).join('');
+                                recomputeRadarKeywords();
+                                return;
+                            }}
+                        }}
+                    }} catch (e) {{}}
+                }}
+            }}
+            banner.innerHTML = "⚠️ 네이버 Npay 토론방이 현재 클라이언트(브라우저) 직접 접속만 허용합니다. <a href='https://m.stock.naver.com/domestic/stock/475560/discussion' target='_blank' style='color:#4fc3f7; font-weight:bold;'>[여기를 눌러 실시간 종토방 열기 ↗]</a>";
+        }}
+
         function switchChart(url, btn) {{
             document.getElementById('stockChartImg').src = url;
             btn.parentElement.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1220,9 +1376,12 @@ def generate_html_string():
             document.getElementById('ytOfficialBox').style.display = (group === 'OFFICIAL') ? 'block' : 'none';
         }}
 
-        // 초기 구동 시 사용자 키워드 태그 렌더링 및 실시간 분류 실행
-        renderKwTags();
+        // 초기 실행
+        renderRadarTags();
+        recomputeRadarKeywords();
+        renderNewsTags();
         reclassifyAllNews();
+        fetchJongtoFromBrowser();
     </script>
 </body>
 </html>
@@ -1245,4 +1404,4 @@ if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V5.1 업데이트 완료!")
+    print("✅ theborn_dashboard.html V6 업데이트 완료!")
