@@ -10,17 +10,17 @@ import re
 import json
 
 # ==============================================================================
-# 🎯 [사용자 직접 관리 구역 1] 뉴스 분류 키워드 사전 (보내주신 최신 설정 반영 완료)
-# 웹 화면의 [📋 파이썬 설정 복사] 버튼으로 언제든 세트로 복사해 덮어씌울 수 있습니다.
+# 🎯 [사용자 직접 관리 구역 1] 뉴스 분류 키워드 사전
 # ==============================================================================
 NEWS_KEYWORDS = {
     "RISK": [
-        "토막", "문닫", "논란", "고소", "점주", "폐업", "폐점", "공정위", "국감", "부진",
-        "하락", "소송", "위반", "사과", "갈등", "불만", "신고", "적발", "폭락", "리스크",
-        "정솔", "지혁", "염지", "허점", "실수", "횡령", "혐의", "보완수사", "수사", "과징금",
-        "과태료", "허풍", "시험대", "위생", "비판", "외면", "철수", "갑질", "허위", "과장",
-        "급락", "우지커피", "눈물", "손절", "차단", "발각", "기만", "파묘", "태극기", "오류",
-        "지적", "휘청", "급감", "축소", "실태", "문 닫", "틀렸다", "감소", "타격", "적자"
+        "유출", "침해", "해지", "KISA", "모욕죄", "토막", "문닫", "논란", "고소", "점주",
+        "폐업", "폐점", "공정위", "국감", "부진", "하락", "소송", "위반", "사과", "갈등",
+        "불만", "신고", "적발", "폭락", "리스크", "정솔", "지혁", "허점", "실수", "횡령",
+        "혐의", "보완수사", "수사", "과징금", "과태료", "허풍", "시험대", "위생", "비판", "외면",
+        "철수", "갑질", "허위", "과장", "급락", "우지커피", "눈물", "손절", "차단", "발각",
+        "기만", "파묘", "태극기", "오류", "지적", "휘청", "급감", "축소", "실태", "문 닫",
+        "틀렸다", "감소", "타격", "적자", "순감소"
     ],
     "PR": [
         "외식사업가", "송훈", "공짜", "100원", "통했다", "지휘", "대기", "대박", "웨이팅", "출시",
@@ -28,40 +28,38 @@ NEWS_KEYWORDS = {
         "쐈다", "러브콜", "열풍", "돌파", "오픈", "공략", "시연", "프로모션", "제공", "500원",
         "파격딜", "당근페이", "이벤트", "행보", "특가", "상생", "협약", "MOU", "선보", "강화",
         "확대", "진출", "개최", "성료", "나눔", "승부수", "성공", "뚫는다", "유통망", "블루오션",
-        "세일즈", "외식왕", "근황", "파브리", "반전", "풍미", "러시", "완판"
+        "세일즈", "세일", "외식왕", "근황", "파브리", "반전", "풍미", "러시", "완판"
     ],
     "SPAM": [
-        "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅",
-        "오늘의식탁", "똑똑한유통", "유통가 투데이", "푸드 투데이", "브리핑", "단신"
+        "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅"
     ]
 }
 
 # ==============================================================================
 # 🎯 [사용자 직접 관리 구역 2] 실시간 이슈 핵심 명사 (레이더) 설정 사전
-# - BOOST: 복합명사/고유명사가 쪼개지지 않고 우선 추출되도록 지정하는 핵심 키워드
-# - STOP : 레이더 랭킹에서 무조건 제외할 불용어 (웹에서 배지의 × 클릭 시 자동 추가됨)
 # ==============================================================================
 RADAR_KEYWORDS = {
     "BOOST": [
-        "빽다방", "우지커피", "홍콩반점", "연돈볼카츠", "새마을식당", "골목셰프", "골목식당",
-        "태극기", "당근페이", "주담대", "오너리스크", "정솔", "지혁", "소유진", "김재환",
-        "오재나", "탐코", "상하이", "청두", "예산", "삼국축제", "가마치", "제육볶음",
-        "밀전병", "창업설명회", "보완수사", "혐의없음", "국정감사", "공정위", "대패삼겹살",
-        "원조쌈밥집", "유정수", "최강록", "정지선", "백반집", "국밥집", "한티역", "순감소"
+        "국감", "축제", "폐점", "판결", "농가", "짬뽕", "안성재", "혐의", "창업", "응서", "연돈", "오너",
+        "빽다방", "홍콩반점", "연돈볼카츠", "새마을식당", "골목셰프", "골목식당", "오너리스크",
+        "정솔", "지혁", "소유진", "김재환", "오재나", "탐코", "상하이", "청두", "예산",
+        "삼국축제", "국정감사", "공정위", "대패삼겹살", "원조쌈밥집", "유정수", "최강록", "정지선",
+        "백반집", "국밥집"
     ],
     "STOP": [
+        "단독", "포토", "칼럼", "데스크칼럼", "인터뷰", "기획", "속보", "신고", "직원",
         "근데", "아니", "진짜", "이거", "저거", "뭔가", "이제", "와서", "혹시", "니들",
         "알고", "어쩌라고", "백종원", "백종원이", "백종원의", "백종원씨", "더본", "더본코리아",
         "대표", "대표님", "갤주", "종팔이", "근황", "지금", "오늘", "오늘자", "최근", "현재",
         "그냥", "너무", "존나", "새끼", "씨발", "시발", "병신", "싯팔새끼", "이새끼", "사람",
-        "솔직히", "진지하게", "경고", "속보", "다시보는", "명작", "이유", "한계", "명확한",
+        "솔직히", "진지하게", "경고", "다시보는", "명작", "이유", "한계", "명확한",
         "도와준", "비교", "진행상황", "유튭", "댓글", "민심", "왜이럼", "생각", "이렇게",
         "모습", "보이는", "하는", "있는", "없는", "같음", "있다", "없다", "되다", "하다",
         "이다", "같다", "보다", "오다", "가다", "주다", "알다", "모르다", "하면", "되면",
         "얘기", "정도", "때문", "부분", "문제", "사실", "현황", "진격", "학인된", "어제",
         "내일", "jpg", "jpeg", "png", "gif", "webp", "mp4", "dc", "app", "araboja",
         "aravoja", "feat", "hot", "유래", "음식", "사진", "영상", "최신", "방법", "하나",
-        "리스트", "추천", "명언", "수급", "지랄", "레전드", "전문가", "인정하는", "증거자료"
+        "리스트", "추천", "명언", "수급", "지랄", "레전드", "전문가", "인정하는", "증거자료", "업로드"
     ]
 }
 # ==============================================================================
@@ -109,160 +107,7 @@ def get_dc_best_posts():
     except Exception as e:
         return [{'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
 
-# --- 2. 네이버 종토방 실시간 동적 수집 엔진 (하드코딩 더미 데이터 0%) ---
-def extract_posts_from_any_json(data, ticker_code="475560"):
-    """네이버 API의 다양한 JSON 응답 구조에서 게시글 리스트를 재귀적으로 추출합니다."""
-    posts = []
-    seen_ids = set()
-
-    def walk(obj):
-        if isinstance(obj, dict):
-            title = obj.get('title') or obj.get('subject')
-            has_meta = any(k in obj for k in (
-                'discussionId', 'nid', 'articleId', 'postId', 'readCount',
-                'viewCount', 'goodCount', 'recommendCount', 'sympathyCount',
-                'writerNickname', 'nickname', 'contents', 'summary'
-            ))
-            if isinstance(title, str) and len(title.strip()) >= 2 and has_meta:
-                nid = str(obj.get('discussionId') or obj.get('nid') or obj.get('articleId') or obj.get('postId') or obj.get('id') or title)
-                if nid not in seen_ids:
-                    seen_ids.add(nid)
-                    desc = str(obj.get('contents') or obj.get('summary') or obj.get('body') or obj.get('content') or '')
-                    desc = re.sub(r'<[^>]+>', ' ', desc).replace('\n', ' ').strip()[:100]
-                    author = str(obj.get('writerNickname') or obj.get('nickname') or obj.get('writerId') or obj.get('author') or '주주')
-                    date_raw = str(obj.get('date') or obj.get('writtenAt') or obj.get('regDate') or obj.get('createdAt') or '최신')
-                    date = date_raw[5:16].replace('-', '.') if len(date_raw) >= 16 else date_raw[:10]
-                    views = str(obj.get('readCount') or obj.get('viewCount') or obj.get('views') or '-')
-                    good = str(obj.get('goodCount') or obj.get('recommendCount') or obj.get('sympathyCount') or obj.get('likeCount') or '0')
-                    bad = str(obj.get('badCount') or obj.get('notRecommendCount') or obj.get('antipathyCount') or obj.get('dislikeCount') or '0')
-                    cmt = obj.get('commentCount') or obj.get('replyCount') or 0
-                    comments = f"[{cmt}]" if cmt else ""
-                    link = f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion/{nid}" if nid.isdigit() else f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion"
-                    posts.append({
-                        'title': title.strip(), 'desc': desc, 'author': author,
-                        'date': date, 'views': views, 'good': good, 'bad': bad,
-                        'comments': comments, 'link': link
-                    })
-            else:
-                for v in obj.values():
-                    walk(v)
-        elif isinstance(obj, list):
-            for it in obj:
-                walk(it)
-
-    walk(data)
-    return posts
-
-def get_naver_jongtobang(ticker_code="475560"):
-    posts = []
-    req_headers = {
-        **COMMON_HEADERS,
-        'Referer': f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion",
-        'Accept': 'application/json, text/plain, */*',
-        'X-Requested-With': 'XMLHttpRequest'
-    }
-
-    # 1단계: 네이버 증권 & Npay 토론방 후보 API 직접 호출
-    api_candidates = [
-        f"https://m.stock.naver.com/front-api/discussion/list?discussionType=localStock&itemCode={ticker_code}&pageSize=20",
-        f"https://m.stock.naver.com/front-api/v1/discussion/list?discussionType=localStock&itemCode={ticker_code}&pageSize=20",
-        f"https://m.stock.naver.com/front-api/discussion/posts?discussionType=localStock&itemCode={ticker_code}&pageSize=20",
-        f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?rsno=0&size=20",
-        f"https://m.stock.naver.com/api/discuss/localStock/{ticker_code}?size=20"
-    ]
-    for url in api_candidates:
-        try:
-            res = requests.get(url, headers=req_headers, timeout=3)
-            if res.status_code == 200 and ('{' in res.text or '[' in res.text):
-                extracted = extract_posts_from_any_json(res.json(), ticker_code)
-                if extracted:
-                    return extracted[:20]
-        except Exception:
-            continue
-
-    # 2단계: Npay 토론방 페이지의 __NEXT_DATA__ 및 Next.js 웹팩 청크에서 API 경로 자동 역추적
-    disc_page_url = f"https://m.stock.naver.com/domestic/stock/{ticker_code}/discussion"
-    try:
-        res = requests.get(disc_page_url, headers=COMMON_HEADERS, timeout=3.5)
-        if res.status_code == 200:
-            html_text = decode_html(res)
-            soup = BeautifulSoup(html_text, 'html.parser')
-
-            # 2-1. __NEXT_DATA__ 내부 검색
-            next_el = soup.select_one('script#__NEXT_DATA__')
-            if next_el and next_el.string:
-                extracted = extract_posts_from_any_json(json.loads(next_el.string), ticker_code)
-                if extracted:
-                    return extracted[:20]
-
-            # 2-2. Next.js discussion 청크 JS 파일 스캔하여 실제 API 엔드포인트 추출
-            chunk_urls = []
-            for sc in soup.select('script[src*="/_next/static/chunks/"]'):
-                src = sc.get('src', '')
-                if any(k in src for k in ['discussion', '78616', '95622', '21178', '70953']):
-                    chunk_urls.append(src if src.startswith('http') else "https://ssl.pstatic.net" + src)
-
-            discovered_apis = set()
-            for c_url in chunk_urls[:3]:
-                try:
-                    c_res = requests.get(c_url, headers=COMMON_HEADERS, timeout=2.5)
-                    if c_res.status_code == 200:
-                        for m in re.findall(r'["\'`](/(?:front-api|api)/[^"\'`\s]{4,90})["\'`]', c_res.text):
-                            if any(w in m.lower() for w in ['discuss', 'post', 'board', 'comment']):
-                                clean_p = re.sub(r'\$\{[^}]+\}', ticker_code, m)
-                                discovered_apis.add("https://m.stock.naver.com" + clean_p)
-                except Exception:
-                    continue
-
-            for d_api in list(discovered_apis)[:4]:
-                test_url = d_api if '?' in d_api else f"{d_api}?discussionType=localStock&itemCode={ticker_code}&code={ticker_code}&pageSize=20&size=20"
-                try:
-                    d_res = requests.get(test_url, headers=req_headers, timeout=2.5)
-                    if d_res.status_code == 200 and ('{' in d_res.text or '[' in d_res.text):
-                        extracted = extract_posts_from_any_json(d_res.json(), ticker_code)
-                        if extracted:
-                            return extracted[:20]
-                except Exception:
-                    continue
-    except Exception:
-        pass
-
-    # 3단계: PC 구형 게시판 및 종목 메인 페이지(item/main.naver) SSR 영역 파싱
-    for pc_url in [
-        f"https://finance.naver.com/item/board.naver?code={ticker_code}",
-        f"https://finance.naver.com/item/main.naver?code={ticker_code}"
-    ]:
-        try:
-            res = requests.get(pc_url, headers={**COMMON_HEADERS, 'Referer': 'https://finance.naver.com/'}, timeout=3)
-            soup = BeautifulSoup(decode_html(res), 'html.parser')
-            for a_el in soup.select('table.type2 td.title a, .section.new_bbs a[href*="board_read"], a[href*="discussion/"]'):
-                title = (a_el.get('title') or a_el.text or '').strip()
-                if not title or len(title) < 2:
-                    continue
-                href = a_el.get('href', '')
-                link = ("https://finance.naver.com" + href) if href.startswith('/item') else (
-                    ("https://m.stock.naver.com" + href) if href.startswith('/domestic') else href
-                )
-                row = a_el.find_parent('tr') or a_el.find_parent('li')
-                tds = row.select('td') if row else []
-                date = tds[0].text.strip() if len(tds) > 0 else '실시간'
-                views = tds[3].text.strip() if len(tds) > 3 else '-'
-                good = tds[4].text.strip() if len(tds) > 4 else '-'
-                bad = tds[5].text.strip() if len(tds) > 5 else '-'
-                posts.append({
-                    'title': title, 'desc': '', 'author': '주주',
-                    'date': date, 'views': views, 'good': good, 'bad': bad,
-                    'comments': '', 'link': link
-                })
-            if posts:
-                return posts[:20]
-        except Exception:
-            continue
-
-    # 서버 IP에서 차단될 경우 빈 리스트를 반환하여 브라우저(Client JS)가 실시간 페치하도록 위임
-    return []
-
-# --- 3. 뉴스 크롤링 & 우선순위 기반 정밀 분류기 ---
+# --- 2. 뉴스 크롤링 & 우선순위 기반 정밀 분류기 ---
 STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
 
 def extract_tokens(title):
@@ -380,12 +225,21 @@ def get_latest_news():
         })
     return final_news
 
-# --- 4. 네이버 금융 주가 + 밸류에이션 + 전자공시 ---
+# --- 3. 네이버 금융 주가 + 펀더멘털/시총 증발 계산 + 전자공시 ---
 def get_stock_and_disclosures(ticker_code="475560"):
     api_url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{ticker_code}"
+    total_shares = 14740746  # 더본코리아 상장주식수
+    paik_shares = 8792850    # 백종원 보유주식수 (59.65%)
+    ipo_price = 34000
+    peak_price = 64500
+    low_52w = 12130
+    margin_call_price = 6875
+
     stock_info = {
-        'price': '오류', 'raw_price': 13380, 'change_str': '-',
+        'price': '오류', 'raw_price': 13600, 'change_str': '-',
         'vol': '-', 'ipo_drop': '-', 'peak_drop': '-', 'margin_safety': 50,
+        'mcap_str': '2,005억', 'mcap_lost_str': '-7,503억',
+        'paik_val_str': '1,196억', 'from_52w_low': '+12.1%',
         'chart_day': '', 'chart_c_day': '', 'chart_c_week': '', 'chart_c_month': '',
         'disclosures': []
     }
@@ -410,13 +264,18 @@ def get_stock_and_disclosures(ticker_code="475560"):
         else:
             stock_info['change_str'] = f"<span style='color:#e0e0e0; font-weight:bold;'>- {cv:,} (0.00%)</span>"
 
-        ipo_price = 34000
-        peak_price = 64500
-        margin_call_price = 6875
-        
         stock_info['ipo_drop'] = f"{((nv - ipo_price) / ipo_price) * 100:.1f}%"
         stock_info['peak_drop'] = f"{((nv - peak_price) / peak_price) * 100:.1f}%"
         
+        # 시가총액, 고점 대비 증발액, 백종원 지분가치 실시간 산출
+        mcap_eok = int((nv * total_shares) / 100000000)
+        peak_mcap_eok = int((peak_price * total_shares) / 100000000)
+        paik_eok = int((nv * paik_shares) / 100000000)
+        stock_info['mcap_str'] = f"{mcap_eok:,}억 원"
+        stock_info['mcap_lost_str'] = f"-{peak_mcap_eok - mcap_eok:,}억 원"
+        stock_info['paik_val_str'] = f"{paik_eok:,}억 원"
+        stock_info['from_52w_low'] = f"+{((nv - low_52w) / low_52w) * 100:.1f}%"
+
         gauge = int(((nv - margin_call_price) / (ipo_price - margin_call_price)) * 100)
         stock_info['margin_safety'] = max(5, min(100, gauge))
 
@@ -455,32 +314,38 @@ def get_stock_and_disclosures(ticker_code="475560"):
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 5. 유튜브 채널 고유 업로드 플레이리스트(VLUU) 수집 ---
+# --- 4. 유튜브 3중 실시간 수집 엔진 (Videos 탭 + Shorts 탭 + 채널필터 최신순 Search) ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
         "handle": "https://www.youtube.com/@studio_OZN",
-        "id": "", "sample_vid": "0Gsvn_I6z1w",
+        "id": "UC0_weuuu1yqBMLyH8n51iJg",
+        "owner_keywords": ["오재나", "studio_OZN"],
+        "search_query": "김재환의 오재나",
         "fallback": [
+            {"vid": "INoddmJf6dE", "title": "모욕죄는 백종원을 위한 법인가? #에펨코리아 #모욕죄 #김재환PD #오재나 #펨코", "date": "2026-11-02", "views": "실시간 집계중"},
             {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "2026-10-21", "views": "583,154회"},
-            {"vid": "4fALTQTUldU", "title": "연돈볼카츠 합의안 타결! 나머지 점주들은 신났을까? #백종원 #김재환 #더본코리아", "date": "2026-10-05", "views": "1,462,077회"},
-            {"vid": "X-RHoJtJz3Q", "title": "홍콩반점 점주들은 소송이 장난인가? #오재나 #김재환PD #백종원 #더본코리아", "date": "2026-09-16", "views": "708,169회"}
+            {"vid": "4fALTQTUldU", "title": "연돈볼카츠 합의안 타결! 나머지 점주들은 신났을까? #백종원 #김재환 #더본코리아", "date": "2026-10-05", "views": "1,462,077회"}
         ]
     },
     {
         "name": "탐코 : 탐욕의 코리아", "group": "CRITIC",
-        "handle": "https://www.youtube.com/channel/UC1rn5BnUdP1OGI6vnxh0IbQ",
-        "id": "UC1rn5BnUdP1OGI6vnxh0IbQ", "sample_vid": "DQ3qTgVC9os",
+        "handle": "https://www.youtube.com/@tamkorea",
+        "id": "",
+        "owner_keywords": ["탐코", "탐욕의 코리아", "tamkorea"],
+        "search_query": "\"탐코 : 탐욕의 코리아\"",
         "fallback": [
-            {"vid": "DQ3qTgVC9os", "title": "백종원 운명을 결정할 소송", "date": "2026-10-24", "views": "234,087회"},
-            {"vid": "NryKk-8AvPY", "title": "더본코리아를 공정위에 고발합니다", "date": "2026-10-23", "views": "227,784회"},
-            {"vid": "3jU0OGvghkA", "title": "백종원과 위생", "date": "2026-10-17", "views": "306,959회"}
+            {"vid": "cpvolw4BJqg", "title": "백종원을 파멸시킬 세 부류의 인간", "date": "2026-10-28", "views": "61,912회"},
+            {"vid": "DQ3qTgVC9os", "title": "백종원 운명을 결정할 소송", "date": "2026-10-24", "views": "234,541회"},
+            {"vid": "NryKk-8AvPY", "title": "더본코리아를 공정위에 고발합니다", "date": "2026-10-23", "views": "228,074회"}
         ]
     },
     {
         "name": "백종원 본채널", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@paik_jongwon",
-        "id": "UCyn-K7rZLXjGl7VXGweIlcA", "sample_vid": "pON-SAEgYUY",
+        "id": "UCyn-K7rZLXjGl7VXGweIlcA",
+        "owner_keywords": ["백종원", "PAIK JONG WON"],
+        "search_query": "백종원 PAIK JONG WON",
         "fallback": [
             {"vid": "pON-SAEgYUY", "title": "[출장 중 배고파_청두] \"짜장면에 춘장이 안 들어간다고?\" 청두 올 때마다 무조건 찾는 영혼의 비빔면!", "date": "2026-10-21", "views": "448,386회"},
             {"vid": "bFX5lJgCPBQ", "title": "쌀쌀한 가을에 당면만둣국 한 그릇", "date": "2026-10-20", "views": "426,194회"},
@@ -490,7 +355,9 @@ YOUTUBE_CHANNELS = [
     {
         "name": "TBK (글로벌소스)", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@TBK_theborn",
-        "id": "UCbgdcVitzVvWdngVx3OYTmA", "sample_vid": "FfC_pNkyaT8",
+        "id": "UCbgdcVitzVvWdngVx3OYTmA",
+        "owner_keywords": ["TBK"],
+        "search_query": "TBK 만능볶음요리소스 OR Mild Paik Ramyun",
         "fallback": [
             {"vid": "FfC_pNkyaT8", "title": "Kimchi Egg Ramyun With Mild Paik Ramyun", "date": "2026-10-13", "views": "1,711회"},
             {"vid": "-wHsjUnhoL4", "title": "Dumpling Ramyun with Mild Paik Ramyun", "date": "2026-10-13", "views": "356회"},
@@ -500,7 +367,9 @@ YOUTUBE_CHANNELS = [
     {
         "name": "더본 테이스티", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_tasty",
-        "id": "", "sample_vid": "gazC1wTYt3k",
+        "id": "",
+        "owner_keywords": ["더본 테이스티", "더본테이스티", "theborn_tasty"],
+        "search_query": "\"더본 테이스티\"",
         "fallback": [
             {"vid": "gazC1wTYt3k", "title": "침샘 폭발 주의! 대구의 맛, 막창짬뽕 화보 영상 🎬", "date": "2026-10-19", "views": "111,744회"},
             {"vid": "GdNx1GQAG_A", "title": "찾았다! 연돈튀김덮밥 할인 소식🫶", "date": "2026-09-29", "views": "27,791회"},
@@ -510,7 +379,9 @@ YOUTUBE_CHANNELS = [
     {
         "name": "더본 NOW", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_now",
-        "id": "", "sample_vid": "nY3ibLP2xbo",
+        "id": "",
+        "owner_keywords": ["더본NOW", "더본 NOW", "theborn_now"],
+        "search_query": "\"더본NOW\"",
         "fallback": [
             {"vid": "nY3ibLP2xbo", "title": "바비큐부터 아이스크림까지 무료?!🔥 창녕 산토끼밥상의 특별한 여름", "date": "2026-10-06", "views": "579회"},
             {"vid": "tGLX12qPsyg", "title": "어디든 달려갑니다! 더본 푸드트럭 삼총사 전격 해부 🔍", "date": "2026-07-02", "views": "1,299회"}
@@ -544,81 +415,149 @@ def resolve_exact_channel_id(ch):
                 return cid
     except Exception:
         pass
-    if ch.get('sample_vid'):
-        try:
-            p_url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
-            payload = {"context": INNERTUBE_CONTEXT, "videoId": ch['sample_vid']}
-            res = requests.post(p_url, json=payload, headers=COMMON_HEADERS, timeout=3)
-            if res.status_code == 200:
-                cid = res.json().get('videoDetails', {}).get('channelId', '')
-                if cid.startswith('UC'):
-                    ch['id'] = cid
-                    return cid
-        except Exception:
-            pass
     return ""
 
-def parse_playlist_and_video_renderers(data, max_count=3):
+def extract_videos_from_innertube(data, max_count=3, owner_keywords=None, target_cid=None):
+    """동영상 탭(videoRenderer) 및 쇼츠 탭(shortsLockupViewModel/reelItemRenderer)을 모두 파싱하며, 검색 결과 시 채널 소유자를 검증합니다."""
     videos = []
     seen_vids = set()
+
     def walk(obj):
         if len(videos) >= max_count:
             return
         if isinstance(obj, dict):
-            if 'playlistVideoRenderer' in obj:
-                pvr = obj['playlistVideoRenderer']
-                vid = pvr.get('videoId', '')
-                if vid and vid not in seen_vids:
-                    t_runs = pvr.get('title', {}).get('runs', [])
-                    title = t_runs[0].get('text', '') if t_runs else pvr.get('title', {}).get('simpleText', '')
-                    info_runs = [r.get('text', '') for r in pvr.get('videoInfo', {}).get('runs', [])]
-                    views, pub = '집계중', '최신'
-                    for ir in info_runs:
-                        if '조회수' in ir or '회' in ir or '천' in ir or '만' in ir:
-                            views = format_view_text(ir)
-                        elif '전' in ir or '방금' in ir or '오늘' in ir:
-                            pub = ir.strip()
-                    if title:
-                        seen_vids.add(vid)
-                        videos.append({
-                            'title': title, 'link': f"https://www.youtube.com/watch?v={vid}",
-                            'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg", 'date': pub, 'views': views
-                        })
-            elif 'videoRenderer' in obj:
+            # 1. 일반 동영상 (videoRenderer)
+            if 'videoRenderer' in obj:
                 vr = obj['videoRenderer']
                 vid = vr.get('videoId', '')
                 if vid and vid not in seen_vids:
+                    # 검색 API에서 호출된 경우 타 채널 영상 혼입 방지 필터
+                    if owner_keywords or target_cid:
+                        owner_runs = (
+                            vr.get('ownerText', {}).get('runs', []) or
+                            vr.get('longBylineText', {}).get('runs', []) or
+                            vr.get('shortBylineText', {}).get('runs', [])
+                        )
+                        owner_name = "".join(r.get('text', '') for r in owner_runs)
+                        owner_id = ""
+                        if owner_runs:
+                            owner_id = owner_runs[0].get('navigationEndpoint', {}).get('browseEndpoint', {}).get('browseId', '')
+                        
+                        id_ok = bool(target_cid and owner_id == target_cid)
+                        name_ok = bool(owner_keywords and any(k.lower() in owner_name.lower() for k in owner_keywords))
+                        if (owner_name or owner_id) and not (id_ok or name_ok):
+                            return
+
                     t_runs = vr.get('title', {}).get('runs', [])
                     title = t_runs[0].get('text', '') if t_runs else vr.get('title', {}).get('simpleText', '')
                     pub = vr.get('publishedTimeText', {}).get('simpleText', '최신')
                     v_raw = vr.get('viewCountText', {}).get('simpleText', '') or "".join(r.get('text', '') for r in vr.get('viewCountText', {}).get('runs', []))
+                    if '시청 중' in v_raw:
+                        return
                     views = format_view_text(v_raw)
                     if title:
                         seen_vids.add(vid)
                         videos.append({
-                            'title': title, 'link': f"https://www.youtube.com/watch?v={vid}",
-                            'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg", 'date': pub, 'views': views
+                            'title': title,
+                            'link': f"https://www.youtube.com/watch?v={vid}",
+                            'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+                            'date': pub,
+                            'views': views
+                        })
+            # 2. 최신 쇼츠 뷰모델 (shortsLockupViewModel)
+            elif 'shortsLockupViewModel' in obj and not owner_keywords:
+                sl = obj['shortsLockupViewModel']
+                vid = sl.get('onTap', {}).get('innertubeCommand', {}).get('reelWatchEndpoint', {}).get('videoId', '')
+                if vid and vid not in seen_vids:
+                    title = sl.get('overlayMetadata', {}).get('primaryText', {}).get('content', '')
+                    v_raw = sl.get('overlayMetadata', {}).get('secondaryText', {}).get('content', '')
+                    if title:
+                        seen_vids.add(vid)
+                        videos.append({
+                            'title': f"[Shorts] {title}",
+                            'link': f"https://www.youtube.com/shorts/{vid}",
+                            'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+                            'date': '쇼츠',
+                            'views': format_view_text(v_raw)
+                        })
+            # 3. 구형 쇼츠 렌더러 (reelItemRenderer)
+            elif 'reelItemRenderer' in obj and not owner_keywords:
+                rir = obj['reelItemRenderer']
+                vid = rir.get('videoId', '')
+                if vid and vid not in seen_vids:
+                    title = rir.get('headline', {}).get('simpleText', '')
+                    v_raw = rir.get('viewCountText', {}).get('simpleText', '')
+                    if title:
+                        seen_vids.add(vid)
+                        videos.append({
+                            'title': f"[Shorts] {title}",
+                            'link': f"https://www.youtube.com/shorts/{vid}",
+                            'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+                            'date': '쇼츠',
+                            'views': format_view_text(v_raw)
                         })
             else:
-                for v in obj.values(): walk(v)
+                for v in obj.values():
+                    walk(v)
         elif isinstance(obj, list):
-            for item in obj: walk(item)
+            for item in obj:
+                walk(item)
+
     walk(data)
     return videos
 
 def fetch_single_channel(ch):
     cid = resolve_exact_channel_id(ch)
     vids = []
+    is_live = False
     b_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
+
+    # 1순위: 검증된 채널 동영상 탭 (params: EgZ2aWRlb3PyBgQKAjoA -> 최신순 동영상 탭)
     if cid.startswith('UC'):
-        uploads_playlist_id = "VLUU" + cid[2:]
         try:
-            payload = {"context": INNERTUBE_CONTEXT, "browseId": uploads_playlist_id}
+            payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZ2aWRlb3PyBgQKAjoA"}
             res = requests.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
             if res.status_code == 200:
-                vids = parse_playlist_and_video_renderers(res.json(), 3)
+                vids = extract_videos_from_innertube(res.json(), 3)
+                if vids:
+                    is_live = True
         except Exception:
             pass
+
+        # 쇼츠 위주 채널(TBK, 더본 테이스티 등)에서 일반 동영상이 3개 미만일 때 쇼츠 탭 보충
+        if len(vids) < 3:
+            try:
+                s_payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZzaG9ydHPyBgUKA5oBAA=="}
+                res_s = requests.post(b_url, json=s_payload, headers=COMMON_HEADERS, timeout=3)
+                if res_s.status_code == 200:
+                    short_vids = extract_videos_from_innertube(res_s.json(), 3 - len(vids))
+                    if short_vids:
+                        existing_links = {v['link'] for v in vids}
+                        for sv in short_vids:
+                            if sv['link'] not in existing_links:
+                                vids.append(sv)
+                        is_live = True
+            except Exception:
+                pass
+
+    # 2순위: 동영상 탭에서 못 가져왔을 경우 정확한 Base64 최신순("CAI=") + 채널명 검증 검색 호출
+    if not vids and ch.get('search_query'):
+        try:
+            s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
+            payload = {"context": INNERTUBE_CONTEXT, "query": ch['search_query'], "params": "CAI="}
+            res = requests.post(s_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
+            if res.status_code == 200:
+                vids = extract_videos_from_innertube(
+                    res.json(), 3,
+                    owner_keywords=ch.get('owner_keywords'),
+                    target_cid=cid
+                )
+                if vids:
+                    is_live = True
+        except Exception:
+            pass
+
+    # 3순위: 최후 백업 스냅샷
     if not vids:
         for item in ch.get('fallback', []):
             vid = item['vid']
@@ -626,30 +565,75 @@ def fetch_single_channel(ch):
                 'title': item['title'], 'link': f"https://www.youtube.com/watch?v={vid}",
                 'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg", 'date': item['date'], 'views': item['views']
             })
-    return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids}
 
-# --- 6. HTML 대시보드 생성 (레이더 & 뉴스 양방향 키워드 매니저 + 종토방 실시간 브라우저 페치) ---
+    return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids, 'is_live': is_live}
+
+def fetch_youtube_hot_search():
+    """유튜브 전체에서 '백종원 더본코리아' 최신 업로드 영상을 실시간 검색합니다 (3번째 탭)."""
+    s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
+    payload = {"context": INNERTUBE_CONTEXT, "query": "백종원 더본코리아", "params": "CAI="}
+    videos = []
+    seen_vids = set()
+    try:
+        res = requests.post(s_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
+        if res.status_code == 200:
+            data = res.json()
+            def walk(obj):
+                if len(videos) >= 8:
+                    return
+                if isinstance(obj, dict):
+                    if 'videoRenderer' in obj:
+                        vr = obj['videoRenderer']
+                        vid = vr.get('videoId', '')
+                        if vid and vid not in seen_vids:
+                            t_runs = vr.get('title', {}).get('runs', [])
+                            title = t_runs[0].get('text', '') if t_runs else vr.get('title', {}).get('simpleText', '')
+                            if not any(k in title for k in ['백종원', '더본', '빽다방', '홍콩반점', '연돈', '오재나']):
+                                return
+                            owner_runs = vr.get('ownerText', {}).get('runs', []) or vr.get('longBylineText', {}).get('runs', [])
+                            channel_name = owner_runs[0].get('text', '유튜브') if owner_runs else '유튜브'
+                            pub = vr.get('publishedTimeText', {}).get('simpleText', '최신')
+                            v_raw = vr.get('viewCountText', {}).get('simpleText', '') or "".join(r.get('text', '') for r in vr.get('viewCountText', {}).get('runs', []))
+                            if '시청 중' in v_raw:
+                                return
+                            seen_vids.add(vid)
+                            videos.append({
+                                'title': title,
+                                'channel': channel_name,
+                                'link': f"https://www.youtube.com/watch?v={vid}",
+                                'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+                                'date': pub,
+                                'views': format_view_text(v_raw)
+                            })
+                    else:
+                        for v in obj.values(): walk(v)
+                elif isinstance(obj, list):
+                    for it in obj: walk(it)
+            walk(data)
+    except Exception:
+        pass
+    return videos
+
+# --- 5. HTML 대시보드 생성 ---
 def generate_html_string():
     with ThreadPoolExecutor(max_workers=10) as executor:
         f_dc = executor.submit(get_dc_best_posts)
-        f_jt = executor.submit(get_naver_jongtobang)
         f_news = executor.submit(get_latest_news)
         f_stock = executor.submit(get_stock_and_disclosures)
         f_yt = [executor.submit(fetch_single_channel, ch) for ch in YOUTUBE_CHANNELS]
+        f_yt_search = executor.submit(fetch_youtube_hot_search)
 
         dc_posts = f_dc.result()
-        jongto_posts = f_jt.result()
         news = f_news.result()
         stock = f_stock.result()
         youtube_data = [f.result() for f in f_yt]
+        yt_hot_search = f_yt_search.result()
 
     kst = timezone(timedelta(hours=9))
     current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H:%M:%S")
 
-    # 브라우저 실시간 레이더 랭킹 연산을 위한 전체 제목 리스트 전달
     all_titles_for_radar = (
         [p['title'] for p in dc_posts if '실패' not in p['title']] +
-        [j['title'] for j in jongto_posts] +
         [n['title'].rsplit(' - ', 1)[0] for n in news if '실패' not in n['title']]
     )
 
@@ -661,18 +645,6 @@ def generate_html_string():
             <a href="{p['link']}" target="_blank">{p['title']} <span style="color:#4fc3f7; font-weight:bold;">{p['comments']}</span></a>
         </li>
         """
-
-    jt_html = ""
-    if jongto_posts:
-        for j in jongto_posts:
-            desc_div = f"<div class='jt-desc'>{j['desc']}</div>" if j.get('desc') else ""
-            jt_html += f"""
-            <li>
-                <div class="meta-line">{j['date']} | {j.get('author', '주주')} | 조회 {j['views']} | <span style="color:#ff8a65;">👍 {j['good']}</span> · <span style="color:#90caf9;">👎 {j['bad']}</span></div>
-                <a href="{j['link']}" target="_blank" style="font-weight:bold;">{j['title']} <span style="color:#ffd54f;">{j['comments']}</span></a>
-                {desc_div}
-            </li>
-            """
 
     news_html = ""
     for n in news:
@@ -707,7 +679,8 @@ def generate_html_string():
     yt_critic_html = ""
     yt_official_html = ""
     for ch in youtube_data:
-        block = f"<div class='channel-name'><a href='{ch['handle']}' target='_blank'>[{ch['name']}] ↗</a></div>"
+        status_badge = "<span style='font-size:0.72em; color:#00e676; margin-left:6px;'>🟢 LIVE</span>" if ch.get('is_live') else "<span style='font-size:0.72em; color:#8b949e; margin-left:6px;'>⚪ 백업</span>"
+        block = f"<div class='channel-name'><a href='{ch['handle']}' target='_blank'>[{ch['name']}] ↗</a>{status_badge}</div>"
         for v in ch['videos']:
             block += f"""
             <div class="yt-item">
@@ -723,10 +696,24 @@ def generate_html_string():
         else:
             yt_official_html += block
 
+    yt_search_html = ""
+    if yt_hot_search:
+        for v in yt_hot_search:
+            yt_search_html += f"""
+            <div class="yt-item">
+                <img src="{v['thumb']}" alt="thumb" onerror="this.style.display='none'">
+                <div class="yt-info">
+                    <a href="{v['link']}" target="_blank">{v['title']}</a>
+                    <div class="yt-meta"><span style="color:#ffd54f;">[{v['channel']}]</span> {v['date']} | 조회수 {v['views']}</div>
+                </div>
+            </div>
+            """
+    else:
+        yt_search_html = "<div style='color:#888; font-size:0.9em;'>실시간 검색 결과를 불러올 수 없습니다.</div>"
+
     default_news_kw_json = json.dumps(NEWS_KEYWORDS, ensure_ascii=False)
     default_radar_kw_json = json.dumps(RADAR_KEYWORDS, ensure_ascii=False)
     raw_titles_json = json.dumps(all_titles_for_radar, ensure_ascii=False)
-    has_server_jt = "true" if jongto_posts else "false"
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -755,7 +742,6 @@ def generate_html_string():
         h1 {{ color: var(--accent-red); margin: 0; font-size: 1.9em; letter-spacing: -0.5px; }}
         .update-time {{ font-size: 0.9em; color: var(--text-muted); }}
 
-        /* 상단 실시간 이슈 핵심 명사 레이더 바 */
         .radar-wrapper {{ max-width: 1700px; margin: 0 auto 20px auto; }}
         .radar-bar {{ background: #14171f; border: 1px solid var(--border-color); border-radius: 10px; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }}
         .radar-left {{ display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 1; }}
@@ -791,7 +777,6 @@ def generate_html_string():
         .tab-btn {{ background: #232834; color: #aaa; border: 1px solid #343b4a; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8em; font-weight: bold; }}
         .tab-btn.active {{ background: var(--accent-blue); color: #000; border-color: var(--accent-blue); }}
 
-        /* 키워드 매니저 공통 스타일 */
         .kw-mgr-btn {{ background: #262c3a; color: var(--accent-gold); border: 1px solid #3d4659; padding: 5px 11px; border-radius: 6px; cursor: pointer; font-size: 0.78em; font-weight: bold; flex-shrink: 0; }}
         .kw-mgr-btn:hover {{ background: #323a4d; }}
         .kw-manager-panel {{ display: none; background: #12151c; border: 1px solid #343b4a; border-radius: 8px; padding: 14px; margin-top: 10px; margin-bottom: 14px; }}
@@ -814,8 +799,6 @@ def generate_html_string():
         .scroll-list li:last-child {{ border-bottom: none; }}
         .meta-line {{ font-size: 0.8em; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }}
 
-        .jt-desc {{ font-size: 0.83em; color: #9ea7b3; margin-top: 4px; line-height: 1.35; }}
-
         .n-badge {{ padding: 2px 6px; border-radius: 4px; font-size: 0.75em; font-weight: bold; }}
         .badge-risk {{ background: rgba(255, 82, 82, 0.2); color: #ff5252; border: 1px solid rgba(255, 82, 82, 0.4); }}
         .badge-pr {{ background: rgba(255, 213, 79, 0.15); color: #ffd54f; border: 1px solid rgba(255, 213, 79, 0.4); }}
@@ -828,6 +811,10 @@ def generate_html_string():
         .yt-item img {{ width: 130px; height: 74px; object-fit: cover; border-radius: 6px; flex-shrink: 0; border: 1px solid #333; }}
         .yt-info a {{ font-size: 0.95em; font-weight: bold; margin-bottom: 5px; word-break: keep-all; }}
         .yt-meta {{ font-size: 0.8em; color: var(--text-muted); }}
+
+        /* 우측 하단 펀더멘털 & 커뮤니티 허브 스타일 */
+        .hub-btn {{ width: 100%; background: linear-gradient(135deg, #1e293b, #0f172a); color: #4fc3f7; border: 1px solid #334155; padding: 12px 14px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.92em; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; transition: 0.2s; }}
+        .hub-btn:hover {{ border-color: #4fc3f7; background: #1e293b; color: #fff; }}
     </style>
 </head>
 <body>
@@ -841,7 +828,6 @@ def generate_html_string():
         <div class="update-time">마지막 업데이트: {current_time}</div>
     </div>
 
-    <!-- 실시간 이슈 핵심 명사 레이더 바 + 수동 키워드 설정 패널 -->
     <div class="radar-wrapper">
         <div class="radar-bar">
             <div class="radar-left">
@@ -856,7 +842,7 @@ def generate_html_string():
                 <span>📌 우선 추출·보존 핵심 명사 (복합명사 쪼개짐 방지 · 클릭 시 삭제)</span>
             </div>
             <div class="kw-input-row">
-                <input type="text" id="inputRadarBoost" class="kw-input" placeholder="우선 추출할 핵심 명사 입력 (예: 우지커피, 당근페이, 순감소)" onkeydown="if(event.key==='Enter') addRadarKw('BOOST')">
+                <input type="text" id="inputRadarBoost" class="kw-input" placeholder="우선 추출할 핵심 명사 입력 (예: 정보유출, 가맹해지, 모욕죄)" onkeydown="if(event.key==='Enter') addRadarKw('BOOST')">
                 <button class="kw-add-btn" onclick="addRadarKw('BOOST')">+ 추가</button>
             </div>
             <div id="tagsRadarBoost" class="kw-tag-wrap"></div>
@@ -865,7 +851,7 @@ def generate_html_string():
                 <span>🚫 레이더 랭킹 제외 불용어 (포함 시 랭킹에서 즉시 숨김 · 클릭 시 복원)</span>
             </div>
             <div class="kw-input-row">
-                <input type="text" id="inputRadarStop" class="kw-input" placeholder="랭킹에서 뺄 단어 입력 (예: 근데, 브랜드, 식당)" onkeydown="if(event.key==='Enter') addRadarKw('STOP')">
+                <input type="text" id="inputRadarStop" class="kw-input" placeholder="랭킹에서 뺄 단어 입력 (예: 단독, 신고, 직원)" onkeydown="if(event.key==='Enter') addRadarKw('STOP')">
                 <button class="kw-add-btn" onclick="addRadarKw('STOP')">+ 제외 추가</button>
             </div>
             <div id="tagsRadarStop" class="kw-tag-wrap"></div>
@@ -925,7 +911,6 @@ def generate_html_string():
             </ul>
         </div>
 
-        <!-- 2. 뉴스 동향 + 사용자 직접 키워드 관리 매니저 -->
         <div class="card">
             <h2>
                 <span>📰 실시간 뉴스 판독기</span>
@@ -937,7 +922,7 @@ def generate_html_string():
                     <span>🚨 쟁점·리스크 키워드 (최우선 적용 · 클릭 시 삭제)</span>
                 </div>
                 <div class="kw-input-row">
-                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 휘청, 급감, 태극기)" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
+                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 유출, 해지, 모욕죄)" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
                     <button class="kw-add-btn" onclick="addNewsKw('RISK')">+ 추가</button>
                 </div>
                 <div id="tagsRisk" class="kw-tag-wrap"></div>
@@ -980,11 +965,15 @@ def generate_html_string():
         <div class="card">
             <h2>📺 유튜브 트래픽 전쟁</h2>
             <div class="tab-group">
-                <button class="tab-btn active" onclick="switchYtTab('CRITIC', this)">⚡ 참교육·비판 (오재나·탐코)</button>
-                <button class="tab-btn" onclick="switchYtTab('OFFICIAL', this)">🛡️ 백종원·더본 공식채널</button>
+                <button class="tab-btn active" onclick="switchYtTab('CRITIC', this)">⚡ 비판 (오재나·탐코)</button>
+                <button class="tab-btn" onclick="switchYtTab('SEARCH', this)">🔥 전체 유튜브 최신이슈</button>
+                <button class="tab-btn" onclick="switchYtTab('OFFICIAL', this)">🛡️ 백종원·더본 공식</button>
             </div>
             <div id="ytCriticBox" class="scroll-list">
                 {yt_critic_html}
+            </div>
+            <div id="ytSearchBox" class="scroll-list" style="display:none;">
+                {yt_search_html}
             </div>
             <div id="ytOfficialBox" class="scroll-list" style="display:none;">
                 {yt_official_html}
@@ -998,15 +987,51 @@ def generate_html_string():
             </ul>
         </div>
 
+        <!-- 5. 펀더멘털 붕괴 지표 & 종토방/커뮤니티 미니 팝업 허브 -->
         <div class="card">
-            <h2>
-                <span>🤬 네이버 종토방 실시간 민심</span>
-                <a href="https://m.stock.naver.com/domestic/stock/475560/discussion" target="_blank" style="font-size:0.75em; color:#ffd54f;">Npay 토론방 ↗</a>
-            </h2>
-            <div id="jtStatusBanner" style="font-size:0.8em; color:#8b949e; margin-bottom:8px;"></div>
-            <ul class="scroll-list" id="jongtoList" style="max-height: 560px;">
-                {jt_html}
-            </ul>
+            <h2>📊 시총 증발·펀더멘털 & 종토방 허브</h2>
+            <div class="kpi-grid" style="grid-template-columns: 1fr 1fr; margin-top: 4px;">
+                <div class="kpi-box">
+                    <div class="kpi-label">현재 시가총액</div>
+                    <div class="kpi-val" style="color:#fff;">{stock['mcap_str']}</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-label">고점(9,508억) 대비 증발</div>
+                    <div class="kpi-val" style="color:#ff5252;">{stock['mcap_lost_str']}</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-label">주당순이익 (EPS)</div>
+                    <div class="kpi-val" style="color:#ff5252;">-441원 (적자전환)</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-label">52주 최저가(12,130원) 대비</div>
+                    <div class="kpi-val" style="color:#ffd54f;">{stock['from_52w_low']}</div>
+                </div>
+            </div>
+
+            <div class="gauge-wrap" style="margin-bottom: 16px;">
+                <div class="gauge-header">
+                    <span>👤 백종원 보유지분(59.65%) 평가액</span>
+                    <span style="color:#ffd54f; font-weight:bold;">{stock['paik_val_str']} (50억 주담대 설정)</span>
+                </div>
+            </div>
+
+            <h2 style="font-size:1.05em; margin-top:4px;">🤬 실시간 종토방 & 커뮤니티 원클릭 뷰어</h2>
+            <div style="font-size:0.8em; color:#8b949e; margin-bottom:10px;">
+                버튼 클릭 시 화면 우측에 스마트폰 크기의 실시간 전용 창이 나란히 열립니다.
+            </div>
+            <button class="hub-btn" onclick="openSidePopup('https://m.stock.naver.com/domestic/stock/475560/discussion', 'naver_jt')">
+                <span>🪟 네이버 Npay 종토방 & 주주오픈톡 미니창 열기</span>
+                <span>↗</span>
+            </button>
+            <button class="hub-btn" onclick="openSidePopup('https://www.fmkorea.com/search.php?mid=best&search_keyword=%EB%B0%B1%EC%A2%85%EC%9B%90&search_target=title_content', 'fmkorea_baek')">
+                <span>🪟 에펨코리아(펨코) '백종원' 포텐 검색창 열기</span>
+                <span>↗</span>
+            </button>
+            <button class="hub-btn" onclick="openSidePopup('https://gall.dcinside.com/board/lists/?id=bjwstreet', 'dc_all')">
+                <span>🪟 골목식당 갤러리 전체글 실시간 미니창 열기</span>
+                <span>↗</span>
+            </button>
         </div>
     </div>
 
@@ -1014,10 +1039,9 @@ def generate_html_string():
         const DEFAULT_NEWS_KW = {default_news_kw_json};
         const DEFAULT_RADAR_KW = {default_radar_kw_json};
         const RAW_TITLES = {raw_titles_json};
-        const HAS_SERVER_JT = {has_server_jt};
 
-        const NEWS_STORAGE_KEY = 'theborn_news_kw_v6';
-        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v6';
+        const NEWS_STORAGE_KEY = 'theborn_news_kw_v8';
+        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v8';
 
         let currentFilter = 'ALL';
         let userNewsKw = loadStored(NEWS_STORAGE_KEY, DEFAULT_NEWS_KW);
@@ -1036,16 +1060,22 @@ def generate_html_string():
             el.style.display = (el.style.display === 'block') ? 'none' : 'block';
         }}
 
+        function openSidePopup(url, name) {{
+            const w = 480;
+            const h = Math.min(window.screen.availHeight - 60, 900);
+            const left = window.screen.availWidth - w - 20;
+            window.open(url, name, `width=${{w}},height=${{h}},left=${{left}},top=30,resizable=yes,scrollbars=yes`);
+        }}
+
         // --- 1. 실시간 이슈 핵심 명사(레이더) 랭킹 엔진 ---
         const JOSA_REGEX = /(에서부터|으로부터|에서|으로|이랑|하고|부터|까지|마저|조차|에게|한테|처럼|보다|라고|이라|다는|라는|은|는|이|가|을|를|의|에|로|과|와|도|만|한|할|함|임)$/;
         const PRED_REGEX = /(있다|없다|같다|되다|하다|이다|봤다|왔다|갔다|했다|됐다|난다|준다|본다|한다|된다|하면|되면|오면|가면|보면|치면|쓰면|알면|나면|주면|받으면|먹으면|겠냐|겠노|겠네|하노|하냐|하나|할까|볼까|하자|해라|마라|거임|건가|인듯|인가|구만|구나|던데|는데|길래|잖아|더라|봐유|애유|네유|햇네|했네)$/;
 
         function normalizeNoun(word, stopSet, boostList) {{
             let w = word.toLowerCase().replace(/[ㄱ-ㅎㅏ-ㅣ]+/g, '');
-            if (w.length < 2 || /^\\d+$/.test(w) || /^\\d+[월일편명개년배위곳잔만원호%]+$/.test(w)) return '';
+            if (w.length < 2 || /^\\d+$/.test(w) || /^\\d+[월일편명개년배위곳잔만원호%시분초]+$/.test(w)) return '';
             if (stopSet.has(w) || PRED_REGEX.test(w)) return '';
 
-            // 우선 추출(BOOST) 명사가 단어 시작부에 포함되어 있으면 원형 그대로 보존
             for (const bw of boostList) {{
                 const bLow = bw.toLowerCase();
                 if (w === bLow || (w.startsWith(bLow) && w.length <= bLow.length + 2)) {{
@@ -1056,7 +1086,7 @@ def generate_html_string():
             let stemmed = w.replace(JOSA_REGEX, '');
             if (stemmed.length >= 2) w = stemmed;
             if (stopSet.has(w) || PRED_REGEX.test(w)) return '';
-            if (w.length >= 3 && (w.endsWith('군') || w.endsWith('시') || w.endsWith('점')) && !/(장군|교시|폐점|출점|지점|반점)$/.test(w)) {{
+            if (w.length >= 3 && (w.endsWith('군') || w.endsWith('시') || w.endsWith('점')) && !/(장군|교시|폐점|출점|지점|반점|직영점)$/.test(w)) {{
                 w = w.slice(0, -1);
             }}
             return stopSet.has(w) ? '' : w;
@@ -1070,13 +1100,11 @@ def generate_html_string():
 
             RAW_TITLES.forEach(title => {{
                 const perTitleSet = new Set();
-                // 1) 우선 추출(BOOST) 명사 직접 매칭
                 boostList.forEach(bw => {{
                     if (title.toLowerCase().includes(bw.toLowerCase()) && !stopSet.has(bw.toLowerCase())) {{
                         perTitleSet.add(bw);
                     }}
                 }});
-                // 2) 일반 어절 형태소 정규화 추출
                 const matches = title.match(/[가-힣A-Za-z0-9]{{2,}}/g) || [];
                 matches.forEach(rawW => {{
                     const norm = normalizeNoun(rawW, stopSet, boostList);
@@ -1087,7 +1115,6 @@ def generate_html_string():
                 }});
             }});
 
-            // 접두사 병합 (짧은 핵심 명사로 통합)
             const keys = Object.keys(freq).sort((a, b) => a.length - b.length);
             const merged = {{}};
             const stemMap = {{}};
@@ -1270,92 +1297,6 @@ def generate_html_string():
             }});
         }}
 
-        // --- 3. 네이버 종토방 클라이언트 실시간 페치 (서버 IP 차단 시 브라우저가 직접 수집) ---
-        async function fetchJongtoFromBrowser() {{
-            if (HAS_SERVER_JT) return;
-            const banner = document.getElementById('jtStatusBanner');
-            const listEl = document.getElementById('jongtoList');
-            banner.textContent = "🔄 브라우저에서 네이버 종토방 실시간 데이터를 불러오는 중...";
-
-            const targetApis = [
-                "https://m.stock.naver.com/api/discuss/localStock/475560?rsno=0&size=20",
-                "https://m.stock.naver.com/front-api/discussion/list?discussionType=localStock&itemCode=475560&pageSize=20",
-                "https://finance.naver.com/item/main.naver?code=475560"
-            ];
-            const proxies = [
-                url => `https://api.allorigins.win/raw?url=${{encodeURIComponent(url)}}`,
-                url => `https://api.codetabs.com/v1/proxy?quest=${{encodeURIComponent(url)}}`
-            ];
-
-            for (const api of targetApis) {{
-                for (const makeProxy of proxies) {{
-                    try {{
-                        const res = await fetch(makeProxy(api));
-                        if (!res.ok) continue;
-                        const text = await res.text();
-
-                        if (text.trim().startsWith('{{') || text.trim().startsWith('[')) {{
-                            const data = JSON.parse(text);
-                            const posts = [];
-                            const walk = (obj) => {{
-                                if (!obj || typeof obj !== 'object') return;
-                                if (Array.isArray(obj)) {{ obj.forEach(walk); return; }}
-                                const t = obj.title || obj.subject;
-                                if (typeof t === 'string' && t.length >= 2 && (obj.discussionId || obj.nid || obj.readCount !== undefined || obj.viewCount !== undefined)) {{
-                                    posts.push(obj);
-                                }} else {{
-                                    Object.values(obj).forEach(walk);
-                                }}
-                            }};
-                            walk(data);
-                            if (posts.length > 0) {{
-                                banner.textContent = "✅ 실시간 연동 완료";
-                                listEl.innerHTML = posts.slice(0, 20).map(p => {{
-                                    const nid = p.discussionId || p.nid || p.articleId || '';
-                                    const title = p.title || p.subject;
-                                    const desc = (p.contents || p.summary || '').replace(/<[^>]+>/g, ' ').slice(0, 95);
-                                    const date = String(p.date || p.writtenAt || '실시간').slice(0, 16);
-                                    const views = p.readCount ?? p.viewCount ?? '-';
-                                    const good = p.goodCount ?? p.recommendCount ?? p.sympathyCount ?? 0;
-                                    const bad = p.badCount ?? p.notRecommendCount ?? p.antipathyCount ?? 0;
-                                    const cmt = p.commentCount ? `[${{p.commentCount}}]` : '';
-                                    const link = nid ? `https://m.stock.naver.com/domestic/stock/475560/discussion/${{nid}}` : `https://m.stock.naver.com/domestic/stock/475560/discussion`;
-                                    RAW_TITLES.push(title);
-                                    return `<li>
-                                        <div class="meta-line">${{date}} | 조회 ${{views}} | <span style="color:#ff8a65;">👍 ${{good}}</span> · <span style="color:#90caf9;">👎 ${{bad}}</span></div>
-                                        <a href="${{link}}" target="_blank" style="font-weight:bold;">${{title}} <span style="color:#ffd54f;">${{cmt}}</span></a>
-                                        ${{desc ? `<div class="jt-desc">${{desc}}</div>` : ''}}
-                                    </li>`;
-                                }}).join('');
-                                recomputeRadarKeywords();
-                                return;
-                            }}
-                        }} else if (text.includes('board_read.naver')) {{
-                            const parser = new DOMParser();
-                            const doc = parser.parseFromString(text, 'text/html');
-                            const links = Array.from(doc.querySelectorAll('a[href*="board_read.naver"]'));
-                            if (links.length > 0) {{
-                                banner.textContent = "✅ 네이버 증권 메인 실시간 연동 완료";
-                                listEl.innerHTML = links.slice(0, 15).map(a => {{
-                                    const title = a.getAttribute('title') || a.textContent.trim();
-                                    const href = a.getAttribute('href');
-                                    const link = href.startsWith('http') ? href : `https://finance.naver.com${{href}}`;
-                                    RAW_TITLES.push(title);
-                                    return `<li>
-                                        <div class="meta-line">실시간 종토방</div>
-                                        <a href="${{link}}" target="_blank" style="font-weight:bold;">${{title}}</a>
-                                    </li>`;
-                                }}).join('');
-                                recomputeRadarKeywords();
-                                return;
-                            }}
-                        }}
-                    }} catch (e) {{}}
-                }}
-            }}
-            banner.innerHTML = "⚠️ 네이버 Npay 토론방이 현재 클라이언트(브라우저) 직접 접속만 허용합니다. <a href='https://m.stock.naver.com/domestic/stock/475560/discussion' target='_blank' style='color:#4fc3f7; font-weight:bold;'>[여기를 눌러 실시간 종토방 열기 ↗]</a>";
-        }}
-
         function switchChart(url, btn) {{
             document.getElementById('stockChartImg').src = url;
             btn.parentElement.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1373,15 +1314,14 @@ def generate_html_string():
             btn.parentElement.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             document.getElementById('ytCriticBox').style.display = (group === 'CRITIC') ? 'block' : 'none';
+            document.getElementById('ytSearchBox').style.display = (group === 'SEARCH') ? 'block' : 'none';
             document.getElementById('ytOfficialBox').style.display = (group === 'OFFICIAL') ? 'block' : 'none';
         }}
 
-        // 초기 실행
         renderRadarTags();
         recomputeRadarKeywords();
         renderNewsTags();
         reclassifyAllNews();
-        fetchJongtoFromBrowser();
     </script>
 </body>
 </html>
@@ -1404,4 +1344,4 @@ if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V6 업데이트 완료!")
+    print("✅ theborn_dashboard.html V8 업데이트 완료!")
