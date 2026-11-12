@@ -10,8 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 
 # ==============================================================================
-# 🤖 [AI 판독 설정] 사용자님의 AI Studio 키 및 할당량 보유 모델 우선순위 리스트
-# (비율 제한 표 기준 RPD가 가장 넉넉한 3.5-flash-lite / 3.1-flash-lite / gemma-4-31b 우선 사용)
+# 🤖 [AI 판독 설정] API 키 (웹 화면 'AI 판독' 패널에서 입력 시 브라우저 자동 저장)
 # ==============================================================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
@@ -31,7 +30,7 @@ AVAILABLE_AI_MODELS = [
 # ==============================================================================
 NEWS_KEYWORDS = {
     "RISK": [
-        "떠나가자", "떠나", "이탈", "유출", "침해", "해지", "모욕죄", "토막", "문닫", "논란", "고소", "점주",
+        "이탈", "유출", "침해", "해지", "모욕죄", "토막", "문닫", "논란", "고소", "점주",
         "폐업", "폐점", "공정위", "국감", "부진", "하락", "소송", "위반", "사과", "갈등",
         "불만", "신고", "적발", "폭락", "리스크", "정솔", "지혁", "허점", "실수", "횡령",
         "혐의", "보완수사", "수사", "과징금", "과태료", "허풍", "시험대", "위생", "비판", "외면",
@@ -46,7 +45,7 @@ NEWS_KEYWORDS = {
         "오픈", "공략", "시연", "프로모션", "제공", "500원", "파격딜", "당근페이", "이벤트", "행보",
         "특가", "상생", "협약", "MOU", "선보", "강화", "확대", "진출", "개최", "성료", "나눔",
         "승부수", "성공", "뚫는다", "유통망", "블루오션", "세일즈", "세일", "외식왕", "근황", "파브리",
-        "반전", "풍미", "러시", "완판", "일일 배달", "하루 배달", "라이더", "한 판 더", "선물", "오토바이"
+        "반전", "풍미", "러시", "완판", "일일 배달", "하루 배달", "라이더", "한 판 더", "선물", "오토바이", "피자 배달"
     ],
     "SPAM": [
         "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅"
@@ -95,7 +94,6 @@ def decode_html(res):
     except UnicodeDecodeError:
         return res.content.decode('cp949', 'replace')
 
-# --- 1. 디시인사이드 골목식당 갤러리 개념글 (50선) ---
 def get_dc_best_posts():
     url = "https://gall.dcinside.com/board/lists/?id=bjwstreet&exception_mode=recommend"
     headers = {**COMMON_HEADERS, 'Referer': 'https://gall.dcinside.com/'}
@@ -127,7 +125,6 @@ def get_dc_best_posts():
     except Exception as e:
         return [{'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
 
-# --- 2. 🧠 투트랙 뉴스 수집 + 고정밀 문맥 판독기 + 다중 모델 AI 엔진 ---
 STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
 
 def extract_tokens(title):
@@ -135,27 +132,33 @@ def extract_tokens(title):
     words = re.findall(r'[가-힣A-Za-z0-9]{2,}', clean_t)
     return {w for w in words if w not in STOP_WORDS}
 
+# 정밀 문맥 규칙 (홍보성 배달쇼, 오너 일가 기사는 명확히 PR로 고정)
 CONTEXT_PATTERNS = {
+    "PR_EXACT_RULES": [
+        (r"(피자.*배달|배달.*피자|배달\s*알바|일일\s*배달|라이더\s*변신|직접\s*배달|치즈킥|소방서까지.*피자|문\s*열었더니.*백종원|배달까지)", "유튜브·배달쇼 언플"),
+        (r"(소유진|아트하우스|대저택|미술관|내조|애셋맘)", "오너 일가 화제성 언플"),
+        (r"(우녹스|파트너십|맞손|업무협약|MOU|협약|협력|데이터화|탑재)", "해외·B2B 제휴 언플"),
+        (r"(신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|이벤트|나눔점|기부)", "신메뉴·이벤트 홍보"),
+        (r"(글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|대박|완판)", "글로벌·신사업 홍보")
+    ],
     "RISK_RULES": [
-        (r"(믿었는데|떠나가자|다\s*떠나|등\s*돌린|한숨|눈물|곡소리|비명|외면)", "가맹점주 이탈·원성"),
-        (r"(가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|급감)", "매장 감소·폐점 리스크"),
+        (r"(가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|급감|이탈)", "매장 감소·가맹점 이탈"),
         (r"(유출|침해|해킹|KISA|개인정보|보안)", "개인정보·보안 사고"),
         (r"(고소|소송|모욕죄|무혐의|혐의없음|피고소|법정|청구포기|패소|재판)", "법적 분쟁·고소 남발"),
-        (r"(위생|원산지|우려|논란|비판|지적|도마|꼼수|외주\s*탓|책임\s*회피|갑질|공정위|국감|가중)", "경영 논란·비판"),
-        (r"(휘청|부진|적자|하락|폭락|급락|반토막|신저가|마진콜|경고등|먹구름|수렁)", "실적·주가 악화")
-    ],
-    "PR_RULES": [
-        (r"(우녹스|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재)", "해외·B2B 제휴 언플"),
-        (r"(피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\s*배달|하루\s*배달|치즈킥|소방서)", "유튜브·배달쇼 언플"),
-        (r"(소유진|아트하우스|대저택|미술관|내조|애셋맘)", "오너 일가 화제성 언플"),
-        (r"(신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|100원|500원|이벤트|나눔점|기부|체험행사|가치를\s*더하다)", "신메뉴·이벤트 홍보"),
-        (r"(글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|열풍|대박|완판|꽂힌\s*소스|새\s*기회)", "글로벌·소스 홍보"),
-        (r"(\[똑똑한|\[유통가|\[푸드|브리핑|단신)", "보도자료 묶음 홍보")
+        (r"(위생|원산지|우려|논란|비판|지적|도마|꼼수|책임\s*회피|갑질|공정위|국감)", "경영 논란·비판"),
+        (r"(휘청|부진|적자|하락|폭락|급락|반토막|수렁)", "실적·주가 악화")
     ]
 }
 
 def ai_contextual_classify(cluster_titles_text, dup_count):
-    """띄어쓰기 변형('피자 시키셨죠...배달', '피자 시켰더니')까지 모두 포착하는 정밀 문맥 판독기"""
+    # 1순위: 배달쇼, 소유진 집 기사 등은 무조건 PR(홍보)로 선점 격리
+    for pattern, reason in CONTEXT_PATTERNS["PR_EXACT_RULES"]:
+        if re.search(pattern, cluster_titles_text):
+            total_cnt = 1 + dup_count
+            if total_cnt >= 2:
+                return "PR", f"🎺 AI판독: 복붙언플 ({total_cnt}건 · {reason})", reason
+            return "PR", f"🎺 AI판독: 홍보·언플 ({reason})", reason
+
     risk_score = 0.0
     pr_score = 0.0
     risk_reasons = []
@@ -167,71 +170,36 @@ def ai_contextual_classify(cluster_titles_text, dup_count):
             if reason not in risk_reasons:
                 risk_reasons.append(reason)
 
-    for pattern, reason in CONTEXT_PATTERNS["PR_RULES"]:
-        if re.search(pattern, cluster_titles_text):
-            pr_score += 3.0
-            if reason not in pr_reasons:
-                pr_reasons.append(reason)
-
     for rk in NEWS_KEYWORDS["RISK"]:
         if rk in cluster_titles_text:
             risk_score += 1.2
             if not risk_reasons:
                 risk_reasons.append(rk)
 
-    for pk in NEWS_KEYWORDS["PR"]:
-        if pk in cluster_titles_text:
-            pr_score += 1.0
-            if not pr_reasons:
-                pr_reasons.append(pk)
-
-    if re.search(r"(믿었는데|떠나가자|논란\s*속|위기\s*속|결국|뒤늦게|싸늘|가중|수렁)", cluster_titles_text):
-        risk_score += 4.5
-        if "가맹점 이탈·위기 비판" not in risk_reasons:
-            risk_reasons.insert(0, "가맹점 이탈·위기 비판")
-
     total_cnt = 1 + dup_count
 
-    if risk_score > 0 and risk_score >= pr_score * 0.8:
+    if risk_score > 0:
         reason_str = risk_reasons[0] if risk_reasons else "리스크"
         if total_cnt >= 2:
             return "RISK", f"🚨 AI판독: 쟁점확산 ({total_cnt}건 · {reason_str})", reason_str
         return "RISK", f"🚨 AI판독: 리스크 ({reason_str})", reason_str
 
-    if pr_score > 0 or total_cnt >= 2:
-        reason_str = pr_reasons[0] if pr_reasons else "보도자료 살포"
-        if total_cnt >= 2:
-            return "PR", f"🎺 AI판독: 복붙언플 ({total_cnt}건 · {reason_str})", reason_str
-        return "PR", f"🎺 AI판독: 홍보·언플 ({reason_str})", reason_str
-
-    return "GEN", "📰 AI판독: 업계·일반동향", "일반동향"
+    return "PR", f"🎺 AI판독: 보도자료 홍보", "보도자료 홍보"
 
 def call_google_ai_with_fallback(prompt, api_key):
-    """
-    신규 AQ. 키 포맷과 AIza 키 포맷을 모두 지원하기 위해 헤더(x-goog-api-key, Authorization)와 쿼리를 병행하며,
-    할당량이 남아 있는 모델(gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b-it 등)을 순차 시도합니다.
-    """
     if not api_key:
         return None, None
     for model_name in AVAILABLE_AI_MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={quote(api_key)}"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key
-        }
-        # Gemma 계열 모델은 responseMimeType: application/json 미지원 경우가 있어 분기 처리
+        headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
         gen_cfg = {"temperature": 0.1}
         if not model_name.startswith("gemma"):
             gen_cfg["responseMimeType"] = "application/json"
 
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": gen_cfg
-        }
+        payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": gen_cfg}
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=4.5)
             if res.status_code != 200 and api_key.startswith("AQ."):
-                # AQ. 토큰일 경우 Bearer 인증 헤더로 재시도
                 headers_bearer = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
                 res = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
@@ -256,11 +224,12 @@ def refine_news_with_gemini_llm(news_clusters, api_key):
         for i, c in enumerate(news_clusters)
     ]
     prompt = (
-        "당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 "
-        "RISK(오너리스크, 가맹점 이탈/해지/폐점, 고소/무혐의/분쟁, 개인정보 유출/KISA 신고, 위생/원산지 논란, 홍보쇼에 대한 비판 보도), "
-        "PR(기업 홍보, 신메뉴/이벤트, 이탈리아 우녹스 오븐 협약 등 해외사업 언플, 유튜브 피자배달 알바/선행 언플, 소유진 일상 과시, 보도자료 복붙), "
-        "GEN(단순 타사 포함 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 순수 JSON 배열로만 답하세요.\n"
-        "출력 예시: [{\"idx\":0, \"cat\":\"RISK\", \"reason\":\"가맹점주 이탈 비판\"}]\n\n"
+        "당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 정확히 분류하세요.\n"
+        "- PR: 기업 홍보, 신메뉴/이벤트, 피자 배달 알바/유튜브 쇼, 소유진 일상/집 공개, 우녹스 오븐 협약 등 마케팅성/보도자료 기사.\n"
+        "- RISK: 가맹점주 이탈/해지, 고소/무혐의/법적분쟁, 개인정보 유출/KISA 신고, 위생/원산지 논란 등 치명적 악재 기사.\n"
+        "- GEN: 단순 업계 트렌드.\n"
+        "짧은 사유(6자 이내)와 함께 순수 JSON 배열로만 답하세요.\n"
+        "출력 예시: [{\"idx\":0, \"cat\":\"PR\", \"reason\":\"피자 배달 홍보\"}]\n\n"
         f"뉴스 목록:\n{json.dumps(items_payload, ensure_ascii=False)}"
     )
     text_out, used_model = call_google_ai_with_fallback(prompt, api_key)
@@ -292,7 +261,6 @@ def get_latest_news():
     raw_list = []
     seen_titles = set()
 
-    # [핵심 개선] 홍보성 보도자료 도배에 리스크 기사가 밀려나지 않도록 '일반 트랙' + '리스크 전용 트랙' 투트랙 수집
     naver_queries = [
         ("더본코리아 OR 백종원 OR 빽다방", '1'),
         ("더본코리아 OR 백종원 논란 OR 고소 OR 해지 OR 유출 OR 위생 OR 소송 OR 폐업", '0'),
@@ -388,7 +356,6 @@ def get_latest_news():
             'dups': dups
         })
 
-    # 리스크(RISK) 기사가 홍보(PR) 도배에 묻히지 않도록 RISK 클러스터를 상단에 우선 배치한 뒤 총 26개 추출
     risk_items = [c for c in scored_clusters if c['cat_code'] == 'RISK']
     other_items = [c for c in scored_clusters if c['cat_code'] != 'RISK']
     final_news = (risk_items[:12] + other_items)[:26]
@@ -398,7 +365,6 @@ def get_latest_news():
 
     return final_news
 
-# --- 3. 네이버 금융 주가 + 펀더멘털/시총 증발 계산 + 전자공시 ---
 def get_stock_and_disclosures(ticker_code="475560"):
     api_url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{ticker_code}"
     total_shares = 14740746
@@ -420,12 +386,10 @@ def get_stock_and_disclosures(ticker_code="475560"):
         res = requests.get(api_url, headers=COMMON_HEADERS, timeout=4)
         data = res.json()
         item = data['result']['areas'][0]['datas'][0]
-        
         nv = int(item['nv'])
         stock_info['raw_price'] = nv
         stock_info['price'] = f"{nv:,}"
         stock_info['vol'] = f"{item.get('aq', 0):,}"
-        
         cv = item['cv']
         cr = item['cr']
         rf = str(item['rf'])
@@ -486,7 +450,6 @@ def get_stock_and_disclosures(ticker_code="475560"):
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 4. 📺 유튜브 최신 영상 전용 수집 엔진 (인기순 오염 원천 차단 + 한국어 날짜 파싱 강제 최신순 정렬) ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
@@ -869,7 +832,6 @@ def fetch_youtube_hot_search():
         pass
     return sort_and_filter_latest_videos(videos, max_count=8, reject_older_than_months=3)
 
-# --- 5. HTML 대시보드 생성 ---
 def generate_html_string():
     with ThreadPoolExecutor(max_workers=10) as executor:
         f_dc = executor.submit(get_dc_best_posts)
@@ -1168,7 +1130,7 @@ def generate_html_string():
             </ul>
         </div>
 
-        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 (투트랙 수집 + 다중 모델 AI 폴백) -->
+        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 -->
         <div class="card">
             <h2>
                 <span>📰 AI 실시간 뉴스 판독기</span>
@@ -1180,10 +1142,10 @@ def generate_html_string():
 
             <div id="aiJudgePanel" class="kw-manager-panel" style="margin-top:0; border-color:#0284c7;">
                 <div class="kw-sec-title" style="color:#4fc3f7;">
-                    <span>🧠 다중 모델 AI 폴백 판독 (3.5-flash-lite / 3.1-flash-lite / gemma-4-31b 순환)</span>
+                    <span>🧠 다중 모델 AI 순환 판독기 (3.5-flash-lite / 3.1-flash-lite / gemma-4-31b)</span>
                 </div>
                 <div style="font-size:0.77em; color:#9ca3af; margin-bottom:8px; line-height:1.4;">
-                    상위 모델 쿼터 소진 시 할당량이 남아 있는 경량 모델들을 순서대로 자동 호출하며, 신규 <code>AQ.</code> 키 헤더 인증과 내장 구문 AI 엔진을 동시 지원합니다.
+                    입력하신 API 키(AQ... 또는 AIza...)를 사용해 쿼터가 남아있는 경량 모델들을 자동 순환 호출하며, 배달쇼/오너일가 기사는 PR(홍보)로 정확히 격리합니다.
                 </div>
                 <div class="kw-input-row">
                     <input type="password" id="inputGeminiKey" class="kw-input" value="" placeholder="API 키 입력 (한 번 입력하면 내 브라우저에만 자동 저장됨)">
@@ -1197,7 +1159,7 @@ def generate_html_string():
                     <span>🚨 쟁점·리스크 보조 키워드 (클릭 시 삭제)</span>
                 </div>
                 <div class="kw-input-row">
-                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 떠나가자, 유출, 모욕죄)" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
+                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 유출, 해지, 모욕죄)" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
                     <button class="kw-add-btn" onclick="addNewsKw('RISK')">+ 추가</button>
                 </div>
                 <div id="tagsRisk" class="kw-tag-wrap"></div>
@@ -1318,9 +1280,9 @@ def generate_html_string():
         const RAW_TITLES = {raw_titles_json};
         const AI_MODEL_LIST = {ai_models_json};
 
-        const NEWS_STORAGE_KEY = 'theborn_news_kw_v91';
-        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v91';
-        const GEMINI_KEY_STORAGE = 'theborn_gemini_api_key_v91';
+        const NEWS_STORAGE_KEY = 'theborn_news_kw_v92';
+        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v92';
+        const GEMINI_KEY_STORAGE = 'theborn_gemini_api_key_v92';
 
         let currentFilter = 'ALL';
         let userNewsKw = loadStored(NEWS_STORAGE_KEY, DEFAULT_NEWS_KW);
@@ -1513,22 +1475,19 @@ def generate_html_string():
             reclassifyAllNews();
         }}
 
-        // 브라우저 내장 고정밀 구문/문맥 스코어링 (띄어쓰기 변형 완벽 대응)
-        const JS_RISK_PATTERNS = [
-            [/믿었는데|떠나가자|다\\s*떠나|등\\s*돌린|한숨|눈물|곡소리|외면/, '가맹점주 이탈·원성'],
-            [/가맹.*해지|폐업|폐점|문\\s*닫|철수|퇴출|순감소|급감/, '매장 감소·폐점'],
-            [/유출|침해|해킹|KISA|개인정보|보안/, '개인정보·보안 사고'],
-            [/고소|소송|모욕죄|무혐의|혐의없음|피고소|청구포기|패소/, '법적 분쟁·고소'],
-            [/위생|원산지|우려|논란|비판|지적|도마|꼼수|책임\\s*회피|갑질|공정위|가중/, '경영 논란·비판'],
-            [/휘청|부진|적자|하락|폭락|급락|반토막|수렁/, '실적·주가 악화']
+        const JS_PR_EXACT = [
+            /피자.*배달|배달.*피자|배달\s*알바|일일\s*배달|라이더\s*변신|직접\s*배달|치즈킥|소방서까지.*피자|문\s*열었더니.*백종원|배달까지/,
+            /소유진|아트하우스|대저택|미술관|내조|애셋맘/,
+            /우녹스|파트너십|맞손|업무협약|MOU|협약|협력|데이터화|탑재/,
+            /신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|이벤트|나눔점|기부/,
+            /글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|대박|완판/
         ];
-        const JS_PR_PATTERNS = [
-            [/우녹스|파트너십|맞손|업무협약|MOU|협약|협력|공동\\s*개발|데이터화|탑재/, '해외·B2B 제휴 언플'],
-            [/피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\\s*배달|하루\\s*배달|치즈킥|소방서/, '유튜브·배달쇼 언플'],
-            [/소유진|아트하우스|대저택|미술관|내조|애셋맘/, '오너 일가 언플'],
-            [/신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|이벤트|나눔점|기부|체험행사|가치를\\s*더하다/, '신메뉴·이벤트 홍보'],
-            [/글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|대박|완판|꽂힌\\s*소스|새\\s*기회/, '글로벌·소스 홍보'],
-            [/\\[똑똑한|\\[유통가|브리핑|단신/, '보도자료 묶음 홍보']
+        const JS_RISK_PATTERNS = [
+            /가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|급감|이탈/,
+            /유출|침해|해킹|KISA|개인정보|보안/,
+            /고소|소송|모욕죄|무혐의|혐의없음|피고소|법정|청구포기|패소|재판/,
+            /위생|원산지|우려|논란|비판|지적|도마|꼼수|책임\s*회피|갑질|공정위|국감/,
+            /휘청|부진|적자|하락|폭락|급락|반토막|수렁/
         ];
 
         function reclassifyAllNews() {{
@@ -1555,36 +1514,20 @@ def generate_html_string():
                     else if (cat === 'PR') label = totalCnt >= 2 ? `🎺 ${{mName}}: 복붙언플 (${{totalCnt}}건 · ${{r}})` : `🎺 ${{mName}}: 홍보·언플 (${{r}})`;
                     else label = `📰 ${{mName}}: 일반 (${{r}})`;
                 }} else {{
-                    let riskScore = 0, prScore = 0;
-                    let riskReason = '', prReason = '';
-
-                    JS_RISK_PATTERNS.forEach(([reg, r]) => {{
-                        if (reg.test(rawTitle)) {{ riskScore += 3.5; if (!riskReason) riskReason = r; }}
-                    }});
-                    JS_PR_PATTERNS.forEach(([reg, r]) => {{
-                        if (reg.test(rawTitle)) {{ prScore += 3.0; if (!prReason) prReason = r; }}
-                    }});
-
-                    const matchedRiskKw = userNewsKw.RISK.find(rk => rawTitle.includes(rk));
-                    const matchedPrKw = userNewsKw.PR.find(pk => rawTitle.includes(pk));
-                    if (matchedRiskKw) {{ riskScore += 1.2; if (!riskReason) riskReason = matchedRiskKw; }}
-                    if (matchedPrKw) {{ prScore += 1.0; if (!prReason) prReason = matchedPrKw; }}
-
-                    if (/믿었는데|떠나가자|논란\\s*속|위기\\s*속|결국|싸늘|가중|수렁/.test(rawTitle)) {{
-                        riskScore += 4.5;
-                        riskReason = '가맹점 이탈·위기 비판';
-                    }}
-
-                    if (riskScore > 0 && riskScore >= prScore * 0.8) {{
-                        cat = 'RISK';
-                        label = totalCnt >= 2 ? `🚨 AI판독: 쟁점확산 (${{totalCnt}}건 · ${{riskReason}})` : `🚨 AI판독: 리스크 (${{riskReason}})`;
-                    }} else if (prScore > 0 || totalCnt >= 2) {{
+                    let isPr = JS_PR_EXACT.some(reg => reg.test(rawTitle));
+                    if (isPr) {{
                         cat = 'PR';
-                        const r = prReason || '보도자료 살포';
+                        const r = '보도자료 홍보';
                         label = totalCnt >= 2 ? `🎺 AI판독: 복붙언플 (${{totalCnt}}건 · ${{r}})` : `🎺 AI판독: 홍보·언플 (${{r}})`;
                     }} else {{
-                        cat = 'GEN';
-                        label = '📰 AI판독: 업계·일반동향';
+                        let riskMatched = JS_RISK_PATTERNS.some(reg => reg.test(rawTitle));
+                        if (riskMatched) {{
+                            cat = 'RISK';
+                            label = totalCnt >= 2 ? `🚨 AI판독: 쟁점확산 (${{totalCnt}}건)` : `🚨 AI판독: 리스크`;
+                        }} else {{
+                            cat = 'PR';
+                            label = '🎺 AI판독: 보도자료 홍보';
+                        }}
                     }}
                 }}
 
@@ -1622,14 +1565,12 @@ def generate_html_string():
                 generationConfig: genCfg
             }});
 
-            // 1차: x-goog-api-key 헤더 + query 파라미터 호출
             let res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent?key=${{encodeURIComponent(apiKey)}}`, {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }},
                 body: bodyStr
             }});
 
-            // 2차: AQ. 키 등 OAuth/Bearer 형식일 경우 Authorization 헤더로 재시도
             if (!res.ok && apiKey.startsWith('AQ.')) {{
                 res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent`, {{
                     method: 'POST',
@@ -1666,12 +1607,12 @@ def generate_html_string():
                 }});
             }});
 
-            const prompt = `당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 RISK(오너리스크, 가맹점주 이탈/폐점/해지, 고소/무혐의/분쟁, 개인정보 유출, 위생/원산지 논란, 홍보쇼에 대한 비판적 보도), PR(기업 홍보, 신메뉴/이벤트, 우녹스 오븐 협약 등 해외 MOU, 유튜브 피자배달 알바/선행 언플, 소유진 일상 과시, 보도자료 복붙), GEN(단순 타사 포함 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 순수 JSON 배열로만 답하세요.\\n출력 형식: [{{"idx":0, "cat":"RISK", "reason":"가맹점주 이탈 비판"}}]\\n\\n뉴스 목록:\\n` + JSON.stringify(items);
+            const prompt = `당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 정확히 분류하세요.\\n- PR: 기업 홍보, 신메뉴/이벤트, 피자 배달 알바/유튜브 쇼, 소유진 일상/집 공개, 우녹스 오븐 협약 등 마케팅성/보도자료 기사.\\n- RISK: 가맹점주 이탈/해지, 고소/무혐의/법적분쟁, 개인정보 유출/KISA 신고, 위생/원산지 논란 등 치명적 악재 기사.\\n- GEN: 단순 업계 트렌드.\\n짧은 사유(6자 이내)와 함께 순수 JSON 배열로만 답하세요.\\n출력 예시: [{{"idx":0, "cat":"PR", "reason":"피자 배달 홍보"}}]\n\n뉴스 목록:\n` + JSON.stringify(items);
 
             let lastErr = '';
             for (const modelName of AI_MODEL_LIST) {{
                 statusEl.style.color = '#ffd54f';
-                statusEl.textContent = `⏳ [${{modelName}}] 모델로 문맥 판독 시도 중...`;
+                statusEl.textContent = `⏳ [${{modelName}}] 모델 판독 중...`;
                 try {{
                     const textOut = await tryCallModel(modelName, apiKey, prompt);
                     const jsonMatch = textOut.match(/\\[.*\\]/s);
@@ -1688,7 +1629,7 @@ def generate_html_string():
                     }});
                     reclassifyAllNews();
                     statusEl.style.color = '#00e676';
-                    statusEl.textContent = `✅ [${{modelName}}] 모델 문맥 판독 완료! (${{parsed.length}}건 정밀 재분류됨)`;
+                    statusEl.textContent = `✅ [${{modelName}}] 판독 완료! (${{parsed.length}}건 정확히 재분류됨)`;
                     return;
                 }} catch (err) {{
                     lastErr = err.message;
@@ -1696,7 +1637,7 @@ def generate_html_string():
             }}
 
             statusEl.style.color = '#ffd54f';
-            statusEl.textContent = `ℹ️ 외부 API 키 인증 제한(${{lastErr.slice(0, 55)}}...)으로 내장 고정밀 구문 AI 판독기가 적용되었습니다.`;
+            statusEl.textContent = `ℹ️ API 제한으로 내장 구문 AI 판독기로 자동 전환 적용되었습니다.`;
             reclassifyAllNews();
         }}
 
@@ -1704,7 +1645,7 @@ def generate_html_string():
             const pyCode = "NEWS_KEYWORDS = " + JSON.stringify(userNewsKw, null, 4) +
                            "\\n\\nRADAR_KEYWORDS = " + JSON.stringify(userRadarKw, null, 4);
             navigator.clipboard.writeText(pyCode).then(() => {{
-                alert("✅ NEWS_KEYWORDS 및 RADAR_KEYWORDS 파이썬 코드가 복사되었습니다!\\n코드 최상단 설정 구역에 그대로 붙여넣으시면 됩니다.");
+                alert("✅ NEWS_KEYWORDS 및 RADAR_KEYWORDS 파이썬 코드가 복사되었습니다!");
             }});
         }}
 
@@ -1760,4 +1701,4 @@ if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V9.1 업데이트 완료!")
+    print("✅ theborn_dashboard.html V9.2 업데이트 완료!")
