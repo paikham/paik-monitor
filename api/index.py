@@ -1,34 +1,41 @@
+import os
+import re
+import json
 import requests
 from bs4 import BeautifulSoup
 import feedparser
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
-import re
-import json
 
 # ==============================================================================
-# 🎯 [사용자 직접 관리 구역 1] 뉴스 분류 키워드 사전
+# 🤖 [선택 설정] 서버 사이드 Gemini AI 판독용 API 키 (없어도 내장 AI 문맥 엔진이 작동하며,
+# 웹 화면 우측 상단 '🤖 AI 판독 설정' 버튼에서 브라우저용 키를 직접 넣을 수도 있습니다.)
+# ==============================================================================
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# ==============================================================================
+# 🎯 [사용자 직접 관리 구역 1] 뉴스 분류 키워드 사전 (AI 문맥 엔진 보조 및 수동 오버라이드용)
 # ==============================================================================
 NEWS_KEYWORDS = {
     "RISK": [
-        "유출", "침해", "해지", "모욕죄", "토막", "문닫", "논란", "고소", "점주",
+        "떠나가자", "떠나", "이탈", "유출", "침해", "해지", "모욕죄", "토막", "문닫", "논란", "고소", "점주",
         "폐업", "폐점", "공정위", "국감", "부진", "하락", "소송", "위반", "사과", "갈등",
         "불만", "신고", "적발", "폭락", "리스크", "정솔", "지혁", "허점", "실수", "횡령",
         "혐의", "보완수사", "수사", "과징금", "과태료", "허풍", "시험대", "위생", "비판", "외면",
         "철수", "갑질", "허위", "과장", "급락", "우지커피", "눈물", "손절", "차단", "발각",
         "기만", "파묘", "태극기", "오류", "지적", "휘청", "급감", "축소", "실태", "문 닫",
-        "틀렸다", "감소", "타격", "적자", "순감소"
+        "틀렸다", "감소", "타격", "적자", "순감소", "청구포기", "패소", "원산지", "짬처리", "퇴출"
     ],
     "PR": [
-        "외식사업가", "송훈", "공짜", "100원", "통했다", "지휘", "대기", "대박", "웨이팅", "출시",
-        "할인", "후원", "기부", "성황", "인기", "호평", "소유진", "내조", "응원", "쏜다",
-        "쐈다", "러브콜", "열풍", "돌파", "오픈", "공략", "시연", "프로모션", "제공", "500원",
-        "파격딜", "당근페이", "이벤트", "행보", "특가", "상생", "협약", "MOU", "선보", "강화",
-        "확대", "진출", "개최", "성료", "나눔", "승부수", "성공", "뚫는다", "유통망", "블루오션",
-        "세일즈", "세일", "외식왕", "근황", "파브리", "반전", "풍미", "러시", "완판"
+        "우녹스", "맞손", "파트너십", "데이터화", "탑재", "투트랙", "글로버스", "외식사업가", "송훈",
+        "공짜", "100원", "통했다", "지휘", "대기", "대박", "웨이팅", "출시", "할인", "후원", "기부",
+        "성황", "인기", "호평", "소유진", "내조", "응원", "쏜다", "쐈다", "러브콜", "열풍", "돌파",
+        "오픈", "공략", "시연", "프로모션", "제공", "500원", "파격딜", "당근페이", "이벤트", "행보",
+        "특가", "상생", "협약", "MOU", "선보", "강화", "확대", "진출", "개최", "성료", "나눔",
+        "승부수", "성공", "뚫는다", "유통망", "블루오션", "세일즈", "세일", "외식왕", "근황", "파브리",
+        "반전", "풍미", "러시", "완판", "일일 배달", "라이더 변신", "한 판 더", "선물"
     ],
     "SPAM": [
         "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅"
@@ -40,14 +47,16 @@ NEWS_KEYWORDS = {
 # ==============================================================================
 RADAR_KEYWORDS = {
     "BOOST": [
+        "신공떡볶이", "신공", "요우티아오", "청구포기", "역전우동", "우녹스", "원산지", "빽보이피자",
+        "정보유출", "개인정보", "가맹해지", "KISA", "모욕죄", "펨코", "에펨코리아", "군산짬뽕",
         "국감", "축제", "폐점", "판결", "농가", "짬뽕", "안성재", "혐의", "창업", "응서", "연돈", "오너",
         "빽다방", "홍콩반점", "연돈볼카츠", "새마을식당", "골목셰프", "골목식당", "오너리스크",
-        "정솔", "지혁", "소유진", "김재환", "오재나", "탐코", "상하이", "청두", "예산",
+        "정솔", "지혁", "소유진", "김재환", "오재나", "탐코", "상하이", "청두", "예산", "베네치아",
         "삼국축제", "국정감사", "공정위", "대패삼겹살", "원조쌈밥집", "유정수", "최강록", "정지선",
-        "백반집", "국밥집"
+        "백반집", "국밥집", "우지커피", "컴포즈"
     ],
     "STOP": [
-        "단독", "포토", "칼럼", "데스크칼럼", "인터뷰", "기획", "속보", "신고", "직원",
+        "단독", "포토", "칼럼", "데스크칼럼", "인터뷰", "기획", "속보", "신고", "직원", "일반",
         "근데", "아니", "진짜", "이거", "저거", "뭔가", "이제", "와서", "혹시", "니들",
         "알고", "어쩌라고", "백종원", "백종원이", "백종원의", "백종원씨", "더본", "더본코리아",
         "대표", "대표님", "갤주", "종팔이", "근황", "지금", "오늘", "오늘자", "최근", "현재",
@@ -107,7 +116,7 @@ def get_dc_best_posts():
     except Exception as e:
         return [{'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
 
-# --- 2. 뉴스 크롤링 & 우선순위 기반 정밀 분류기 ---
+# --- 2. 🧠 AI 문맥 기반 뉴스 판독기 (구문 패턴 추론 + Gemini API 하이브리드) ---
 STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
 
 def extract_tokens(title):
@@ -115,14 +124,128 @@ def extract_tokens(title):
     words = re.findall(r'[가-힣A-Za-z0-9]{2,}', clean_t)
     return {w for w in words if w not in STOP_WORDS}
 
-def classify_single_news(title):
+# 문맥 패턴 사전 (단순 키워드 1개가 아니라 문맥/구문 구조를 포착)
+CONTEXT_PATTERNS = {
+    "RISK_RULES": [
+        (r"(믿었는데|떠나가자|다\s*떠나|등\s*돌린|한숨|눈물|곡소리|비명)", "가맹점주 이탈·원성"),
+        (r"(가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|급감)", "매장 감소·폐점 리스크"),
+        (r"(유출|침해|해킹|KISA|개인정보|보안)", "개인정보·보안 사고"),
+        (r"(고소|소송|모욕죄|무혐의|혐의없음|피고소|법정|청구포기|패소|재판)", "법적 분쟁·고소 남발"),
+        (r"(위생|원산지|우려|논란|비판|지적|도마|꼼수|외주\s*탓|책임\s*회피|갑질|공정위|국감)", "경영 논란·비판"),
+        (r"(휘청|부진|적자|하락|폭락|급락|반토막|신저가|마진콜|경고등|먹구름|수렁)", "실적·주가 악화")
+    ],
+    "PR_RULES": [
+        (r"(우녹스|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재)", "해외·B2B 제휴 언플"),
+        (r"(피자\s*배달|배달\s*알바|일일\s*배달|라이더\s*변신|직접\s*배달|치즈킥|소방서|선물)", "유튜브·배달쇼 언플"),
+        (r"(소유진|아트하우스|대저택|미술관|내조|애셋맘)", "오너 일가 화제성 언플"),
+        (r"(신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|100원|500원|이벤트|나눔점|기부|체험행사)", "신메뉴·이벤트 홍보"),
+        (r"(글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|열풍|대박|완판)", "글로벌·신사업 홍보"),
+        (r"(\[똑똑한|\[유통가|\[푸드|브리핑|단신)", "보도자료 묶음 홍보")
+    ]
+}
+
+def ai_contextual_classify(cluster_titles_text, dup_count):
+    """
+    단순 단어 포함 여부가 아닌 문장 전체의 문맥(Context)과 보도자료 복붙 밀도를 종합 분석합니다.
+    (예: '사장님들 다 떠나가자 직접 오토바이 타고 홍보 나섰다' -> 홍보 단어가 있어도 '떠나가자' 비판 문맥을 우선 포착해 RISK 판정)
+    """
+    risk_score = 0
+    pr_score = 0
+    risk_reasons = []
+    pr_reasons = []
+
+    # 1단계: 구문/문맥 정규식 스캔 (가중치 +3)
+    for pattern, reason in CONTEXT_PATTERNS["RISK_RULES"]:
+        if re.search(pattern, cluster_titles_text):
+            risk_score += 3
+            if reason not in risk_reasons:
+                risk_reasons.append(reason)
+
+    for pattern, reason in CONTEXT_PATTERNS["PR_RULES"]:
+        if re.search(pattern, cluster_titles_text):
+            pr_score += 2.5
+            if reason not in pr_reasons:
+                pr_reasons.append(reason)
+
+    # 2단계: 세부 키워드 스캔 (가중치 +1.2)
     for rk in NEWS_KEYWORDS["RISK"]:
-        if rk in title:
-            return 'RISK', f'🚨 쟁점·리스크 ({rk})'
+        if rk in cluster_titles_text:
+            risk_score += 1.2
+            if not risk_reasons:
+                risk_reasons.append(rk)
+
     for pk in NEWS_KEYWORDS["PR"]:
-        if pk in title:
-            return 'PR', f'🎺 자본언플·홍보 ({pk})'
-    return 'GEN', '📰 일반동향'
+        if pk in cluster_titles_text:
+            pr_score += 1.0
+            if not pr_reasons:
+                pr_reasons.append(pk)
+
+    # 3단계: 복합 문맥 보정 (비판적 인용구 + 홍보 행위가 결합된 기사는 '비판/리스크'로 강제 승격)
+    if re.search(r"(믿었는데|떠나가자|논란\s*속|위기\s*속|결국|뒤늦게|싸늘)", cluster_titles_text):
+        risk_score += 4.0
+        if "위기 돌파용 쇼·이탈 비판" not in risk_reasons:
+            risk_reasons.insert(0, "위기·이탈 비판")
+
+    total_cnt = 1 + dup_count
+
+    # 4단계: 최종 판정 및 라벨 생성
+    if risk_score > 0 and risk_score >= pr_score * 0.8:
+        reason_str = risk_reasons[0] if risk_reasons else "리스크"
+        if total_cnt >= 2:
+            return "RISK", f"🚨 AI판독: 쟁점확산 ({total_cnt}건 · {reason_str})", reason_str
+        return "RISK", f"🚨 AI판독: 리스크 ({reason_str})", reason_str
+
+    if pr_score > 0 or total_cnt >= 3:
+        reason_str = pr_reasons[0] if pr_reasons else "보도자료 살포"
+        if total_cnt >= 2:
+            return "PR", f"🎺 AI판독: 복붙언플 ({total_cnt}건 · {reason_str})", reason_str
+        return "PR", f"🎺 AI판독: 홍보·언플 ({reason_str})", reason_str
+
+    return "GEN", "📰 AI판독: 업계·일반동향", "일반동향"
+
+def refine_news_with_gemini_llm(news_clusters, api_key):
+    """GEMINI_API_KEY가 설정되어 있을 경우 Gemini 2.5 Flash 모델을 호출해 한 번에 정밀 판독합니다."""
+    if not api_key or not news_clusters:
+        return
+    try:
+        items_payload = [
+            {"idx": i, "title": c["title"], "dup_count": len(c.get("dups", []))}
+            for i, c in enumerate(news_clusters)
+        ]
+        prompt = (
+            "당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 "
+            "RISK(오너리스크, 가맹점 이탈/폐점, 고소/분쟁, 위생/원산지 논란, 주가/실적 부진, 홍보 행위에 대한 비판적 보도), "
+            "PR(기업 홍보, 신메뉴/이벤트, 해외 MOU/협약, 유튜브 일일배달/선행 홍보, 소유진 일상 과시, 보도자료 복붙), "
+            "GEN(단순 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 JSON 배열로 답하세요.\n"
+            "출력 형식: [{\"idx\":0, \"cat\":\"RISK\", \"reason\":\"가맹점주 이탈 비판\"}, ...]\n\n"
+            f"뉴스 목록:\n{json.dumps(items_payload, ensure_ascii=False)}"
+        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}
+        }
+        res = requests.post(url, json=payload, timeout=5)
+        if res.status_code == 200:
+            text_out = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+            parsed = json.loads(text_out)
+            for item in parsed:
+                idx = item.get("idx")
+                cat = item.get("cat")
+                reason = item.get("reason", "AI문맥")
+                if isinstance(idx, int) and 0 <= idx < len(news_clusters) and cat in ("RISK", "PR", "GEN"):
+                    c = news_clusters[idx]
+                    total_cnt = 1 + len(c.get("dups", []))
+                    c["cat_code"] = cat
+                    c["ai_reason"] = reason
+                    if cat == "RISK":
+                        c["cat_label"] = f"🚨 AI정밀: 쟁점 ({total_cnt}건 · {reason})" if total_cnt >= 2 else f"🚨 AI정밀: 리스크 ({reason})"
+                    elif cat == "PR":
+                        c["cat_label"] = f"🎺 AI정밀: 복붙언플 ({total_cnt}건 · {reason})" if total_cnt >= 2 else f"🎺 AI정밀: 홍보·언플 ({reason})"
+                    else:
+                        c["cat_label"] = f"📰 AI정밀: 일반 ({reason})"
+    except Exception:
+        pass
 
 def get_latest_news():
     raw_list = []
@@ -141,7 +264,7 @@ def get_latest_news():
                 title = (title_el.get('title') or title_el.text or '').strip()
                 if not title or any(sp in title for sp in NEWS_KEYWORDS["SPAM"]):
                     continue
-                if not any(k in title for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당']):
+                if not any(k in title for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공']):
                     continue
                 key = re.sub(r'\W+', '', title)[:18]
                 if key in seen_titles:
@@ -157,7 +280,7 @@ def get_latest_news():
         except Exception:
             pass
 
-    q_encoded = quote("백종원 OR 더본코리아 OR 빽다방 OR 홍콩반점 when:7d")
+    q_encoded = quote("백종원 OR 더본코리아 OR 빽다방 OR 빽보이피자 when:7d")
     rss_url = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
     try:
         res = requests.get(rss_url, headers=COMMON_HEADERS, timeout=5)
@@ -169,7 +292,7 @@ def get_latest_news():
             parts = full_t.rsplit(' - ', 1)
             pure_t = parts[0].strip()
             press = parts[1].strip() if len(parts) > 1 else '뉴스'
-            if not any(k in pure_t for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당']):
+            if not any(k in pure_t for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공']):
                 continue
             key = re.sub(r'\W+', '', pure_t)[:18]
             if key in seen_titles:
@@ -181,7 +304,7 @@ def get_latest_news():
         pass
 
     if not raw_list:
-        return [{'title': '뉴스 로딩 실패', 'pure_title': '뉴스 로딩 실패', 'link': '#', 'date': '-', 'cat_code': 'GEN', 'cat_label': '오류', 'dups': []}]
+        return [{'title': '뉴스 로딩 실패', 'pure_title': '뉴스 로딩 실패', 'link': '#', 'date': '-', 'cat_code': 'GEN', 'cat_label': '오류', 'dups': [], 'ai_reason': ''}]
 
     clusters = []
     for item in raw_list:
@@ -203,16 +326,7 @@ def get_latest_news():
         main = cl['main']
         dups = cl['dups']
         all_titles_in_cluster = " ".join([main['pure_title']] + [d['pure_title'] for d in dups])
-        cat_code, cat_label = classify_single_news(all_titles_in_cluster)
-        
-        total_cnt = 1 + len(dups)
-        if total_cnt >= 3 and cat_code != 'RISK':
-            cat_code = 'PR'
-            cat_label = f"🎺 보도자료 복붙 ({total_cnt}건 살포)"
-        elif total_cnt == 2 and cat_code == 'PR':
-            cat_label = f"🎺 보도자료 복붙 (2건 살포)"
-        elif total_cnt >= 2 and cat_code == 'RISK':
-            cat_label = f"🚨 쟁점 확산 ({total_cnt}건 보도)"
+        cat_code, cat_label, ai_reason = ai_contextual_classify(all_titles_in_cluster, len(dups))
 
         final_news.append({
             'title': f"{main['pure_title']} - {main['press']}",
@@ -221,8 +335,13 @@ def get_latest_news():
             'date': main['date'],
             'cat_code': cat_code,
             'cat_label': cat_label,
+            'ai_reason': ai_reason,
             'dups': dups
         })
+
+    if GEMINI_API_KEY:
+        refine_news_with_gemini_llm(final_news, GEMINI_API_KEY)
+
     return final_news
 
 # --- 3. 네이버 금융 주가 + 펀더멘털/시총 증발 계산 + 전자공시 ---
@@ -236,10 +355,10 @@ def get_stock_and_disclosures(ticker_code="475560"):
     margin_call_price = 6875
 
     stock_info = {
-        'price': '오류', 'raw_price': 13570, 'change_str': '-',
+        'price': '오류', 'raw_price': 13180, 'change_str': '-',
         'vol': '-', 'ipo_drop': '-', 'peak_drop': '-', 'margin_safety': 50,
-        'mcap_str': '2,000억 원', 'mcap_lost_str': '-7,507억 원',
-        'paik_val_str': '1,193억 원', 'from_52w_low': '+11.9%',
+        'mcap_str': '1,942억 원', 'mcap_lost_str': '-7,565억 원',
+        'paik_val_str': '1,158억 원', 'from_52w_low': '+8.7%',
         'chart_day': '', 'chart_c_day': '', 'chart_c_week': '', 'chart_c_month': '',
         'disclosures': []
     }
@@ -313,17 +432,17 @@ def get_stock_and_disclosures(ticker_code="475560"):
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 4. 유튜브 정밀 수집 엔진 (채널 '동영상' 탭 전용 추출로 쇼츠 선점 완벽 차단) ---
+# --- 4. 📺 유튜브 최신 영상 전용 수집 엔진 (인기순 오염 원천 차단 + 한국어 날짜 파싱 강제 최신순 정렬) ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
         "handle": "https://www.youtube.com/@studio_OZN",
-        "id": "", "sample_vid": "INoddmJf6dE",
+        "id": "UC0_weuuu1yqBMLyH8n51iJg", "sample_vid": "INoddmJf6dE",
         "allow_shorts_fallback": False,
         "owner_keywords": ["오재나", "studio_OZN"],
         "search_query": "김재환의 오재나 백종원",
         "fallback": [
-            {"vid": "INoddmJf6dE", "title": "모욕죄는 백종원을 위한 법인가? #에펨코리아 #모욕죄 #김재환PD #오재나 #펨코", "date": "2026-11-02", "views": "7,040회"},
+            {"vid": "INoddmJf6dE", "title": "모욕죄는 백종원을 위한 법인가? #에펨코리아 #모욕죄 #김재환PD #오재나 #펨코", "date": "2026-11-02", "views": "715,257회"},
             {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "2026-10-21", "views": "583,154회"},
             {"vid": "4fALTQTUldU", "title": "연돈볼카츠 합의안 타결! 나머지 점주들은 신났을까? #백종원 #김재환 #더본코리아", "date": "2026-10-05", "views": "1,462,077회"}
         ]
@@ -331,27 +450,27 @@ YOUTUBE_CHANNELS = [
     {
         "name": "탐코 : 탐욕의 코리아", "group": "CRITIC",
         "handle": "https://www.youtube.com/@tamkorea",
-        "id": "", "sample_vid": "cpvolw4BJqg",
+        "id": "", "sample_vid": "LbNF4wQJ9sk",
         "allow_shorts_fallback": False,
         "owner_keywords": ["탐코", "탐욕의 코리아", "tamkorea"],
         "search_query": "탐코 탐욕의 코리아 백종원",
         "fallback": [
-            {"vid": "cpvolw4BJqg", "title": "백종원을 파멸시킬 세 부류의 인간", "date": "2026-10-28", "views": "61,912회"},
-            {"vid": "DQ3qTgVC9os", "title": "백종원 운명을 결정할 소송", "date": "2026-10-24", "views": "234,541회"},
-            {"vid": "NryKk-8AvPY", "title": "더본코리아를 공정위에 고발합니다", "date": "2026-10-23", "views": "228,074회"}
+            {"vid": "LbNF4wQJ9sk", "title": "숫자가 가리키는 백종원의 종말", "date": "2026-11-02", "views": "17,733회"},
+            {"vid": "RkFbcgPNofs", "title": "무너진 백종원 대기업의 꿈", "date": "2026-10-31", "views": "20,592회"},
+            {"vid": "cpvolw4BJqg", "title": "백종원을 파멸시킬 세 부류의 인간", "date": "2026-10-28", "views": "61,912회"}
         ]
     },
     {
         "name": "백종원 본채널", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@paik_jongwon",
-        "id": "UCyn-K7rZLXjGl7VXGweIlcA", "sample_vid": "pON-SAEgYUY",
+        "id": "UCyn-K7rZLXjGl7VXGweIlcA", "sample_vid": "fGPEmOd53BY",
         "allow_shorts_fallback": False,
         "owner_keywords": ["백종원", "PAIK JONG WON"],
         "search_query": "백종원 PAIK JONG WON",
         "fallback": [
-            {"vid": "pON-SAEgYUY", "title": "[출장 중 배고파_청두] \"짜장면에 춘장이 안 들어간다고?\" 청두 올 때마다 무조건 찾는 영혼의 비빔면!", "date": "2026-10-21", "views": "448,386회"},
-            {"vid": "bFX5lJgCPBQ", "title": "쌀쌀한 가을에 당면만둣국 한 그릇", "date": "2026-10-20", "views": "426,194회"},
-            {"vid": "w53qGlJ1vLI", "title": "막창을 튀겨서 짬뽕에 넣었습니다!", "date": "2026-10-08", "views": "870,363회"}
+            {"vid": "fGPEmOd53BY", "title": "피자 배달 알바합니다! 그런데 사람들이 못 알아봅니다ㅋㅋ", "date": "2026-11-05", "views": "125,756회"},
+            {"vid": "KNG-_c_p87k", "title": "[출장 중 배고파_청두] 1시간 40분 웨이팅?! 청두식 마라훠궈의 진짜 매운맛을 보여드립니다", "date": "2026-11-04", "views": "101,208회"},
+            {"vid": "9a0n0ZWrLRI", "title": "[출장 중 배고파_일본 오사카] 현지 직장인들이 줄 서서 먹는다는 일본식 돼지고기 스테이크", "date": "2026-10-28", "views": "569,011회"}
         ]
     },
     {
@@ -399,12 +518,55 @@ INNERTUBE_CONTEXT = {
 }
 
 def format_view_text(v_str):
-    v_str = v_str.replace('조회수', '').strip()
+    v_str = str(v_str).replace('조회수', '').strip()
     if not v_str:
         return '집계중'
+    if v_str.isdigit():
+        return f"{int(v_str):,}회"
     if not v_str.endswith('회') and not v_str.endswith('중'):
         return v_str + '회'
     return v_str
+
+def parse_ko_age_to_minutes(date_str):
+    """
+    '3시간 전', '2일 전', '3주 전', '1년 전', '2026-11-02' 등을 분(minute) 단위 경과 시간으로 변환합니다.
+    과거 인기 영상(1년 전, 2년 전)을 걸러내고 무조건 최신순으로 정렬하기 위한 핵심 함수입니다.
+    """
+    if not date_str:
+        return 999999
+    s = str(date_str).strip()
+    if s in ('방금', '최신', '쇼츠'):
+        return 1
+    m = re.search(r'(\d+)\s*(초|분|시간|일|주|개월|달|년)', s)
+    if m:
+        val = int(m.group(1))
+        unit = m.group(2)
+        mult = {'초': 0.02, '분': 1, '시간': 60, '일': 1440, '주': 10080, '개월': 43200, '달': 43200, '년': 525600}
+        return int(val * mult.get(unit, 1440))
+    # YYYY-MM-DD 형식일 경우
+    m_iso = re.match(r'(\d{4})-(\d{2})-(\d{2})', s)
+    if m_iso:
+        try:
+            dt = datetime(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)), tzinfo=timezone(timedelta(hours=9)))
+            now = datetime.now(timezone(timedelta(hours=9)))
+            diff_min = int((now - dt).total_seconds() // 60)
+            return max(1, diff_min)
+        except Exception:
+            pass
+    return 500000
+
+def sort_and_filter_latest_videos(videos, max_count=3, reject_older_than_months=7):
+    """수집된 영상 후보들을 최신순(경과시간 오름차순)으로 정렬하고 1~2년 전 구형 인기 영상을 배제합니다."""
+    if not videos:
+        return []
+    for v in videos:
+        v['_age_min'] = parse_ko_age_to_minutes(v.get('date', ''))
+    
+    max_age_min = reject_older_than_months * 43200
+    recent_vids = [v for v in videos if v['_age_min'] <= max_age_min]
+    target_list = recent_vids if len(recent_vids) >= 2 else videos
+    target_list.sort(key=lambda x: x['_age_min'])
+    return target_list[:max_count]
 
 def resolve_exact_channel_id(ch):
     if ch.get('id'):
@@ -434,20 +596,22 @@ def resolve_exact_channel_id(ch):
             pass
     return ""
 
-def extract_full_videos_only(data_node, max_count=3, owner_keywords=None, target_cid=None):
-    """쇼츠(shortsLockupViewModel/reelItemRenderer)를 철저히 배제하고 정규 동영상(videoRenderer)만 추출합니다."""
+def extract_full_videos_only(data_node, max_scan=18, owner_keywords=None, target_cid=None):
+    """그리드/검색 결과에서 최대 18개의 정규 영상을 스캔해 날짜 파싱 후 최신순 정렬이 가능하도록 합니다."""
     videos = []
     seen_vids = set()
 
     def walk(obj):
-        if len(videos) >= max_count:
+        if len(videos) >= max_scan:
             return
         if isinstance(obj, dict):
+            # 채널 홈 탭의 대표 영상/인기 영상 선반(channelFeaturedContentRenderer, shelfRenderer)은 건너뜀
+            if 'channelFeaturedContentRenderer' in obj or ' channelVideoPlayerRenderer' in obj:
+                return
             if 'videoRenderer' in obj:
                 vr = obj['videoRenderer']
                 vid = vr.get('videoId', '')
                 if vid and vid not in seen_vids:
-                    # 쇼츠 링크(/shorts/)가 걸려있는 렌더러는 정규 영상에서 제외
                     nav_url = vr.get('navigationEndpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '')
                     if '/shorts/' in nav_url:
                         return
@@ -467,9 +631,9 @@ def extract_full_videos_only(data_node, max_count=3, owner_keywords=None, target
 
                     t_runs = vr.get('title', {}).get('runs', [])
                     title = t_runs[0].get('text', '') if t_runs else vr.get('title', {}).get('simpleText', '')
-                    pub = vr.get('publishedTimeText', {}).get('simpleText', '최신')
+                    pub = vr.get('publishedTimeText', {}).get('simpleText', '')
                     v_raw = vr.get('viewCountText', {}).get('simpleText', '') or "".join(r.get('text', '') for r in vr.get('viewCountText', {}).get('runs', []))
-                    if '시청 중' in v_raw:
+                    if '시청 중' in v_raw or not pub:
                         return
                     if title:
                         seen_vids.add(vid)
@@ -491,7 +655,6 @@ def extract_full_videos_only(data_node, max_count=3, owner_keywords=None, target
     return videos
 
 def extract_shorts_only(data_node, max_count=3):
-    """TBK·더본테이스티 등 쇼츠 전용 홍보 채널에서 본영상이 부족할 때만 보조로 사용합니다."""
     videos = []
     seen_vids = set()
     def walk(obj):
@@ -524,20 +687,19 @@ def extract_shorts_only(data_node, max_count=3):
 
 def fetch_single_channel(ch):
     cid = resolve_exact_channel_id(ch)
-    vids = []
+    candidate_vids = []
     is_live = False
     b_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
 
-    # 1순위: 최신 프로토콜의 '동영상(Videos)' 탭 파라미터(EgZ2aWRlb3PyBgUKA5oBAA==)로 직접 호출
+    # 1순위: 채널의 기본 탭 목록을 먼저 조회한 뒤, '동영상(Videos)' 탭의 순수 기본 params(최신순)로 호출
     if cid.startswith('UC'):
         try:
-            payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZ2aWRlb3PyBgUKA5oBAA=="}
+            # 먼저 기본 채널 브라우징 또는 순수 동영상 탭 기본값("EgZ2aWRlb3M=") 호출
+            payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZ2aWRlb3M="}
             res = requests.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
             if res.status_code == 200:
                 r_json = res.json()
                 tabs = r_json.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
-                
-                # 응답 내부에서 정확히 '동영상/Videos' 탭을 찾아 그 안의 content 만 파싱 (홈 탭 쇼츠 선점 원천 차단)
                 videos_tab_content = None
                 videos_tab_params = None
                 for t in tabs:
@@ -545,68 +707,86 @@ def fetch_single_channel(ch):
                     t_title = tr.get('title', '')
                     t_url = tr.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '')
                     if t_title in ('동영상', 'Videos') or t_url.endswith('/videos'):
-                        videos_tab_content = tr.get('content')
-                        videos_tab_params = tr.get('endpoint', {}).get('browseEndpoint', {}).get('params')
+                        if tr.get('selected') and tr.get('content'):
+                            videos_tab_content = tr.get('content')
+                        else:
+                            videos_tab_params = tr.get('endpoint', {}).get('browseEndpoint', {}).get('params')
                         break
 
                 if videos_tab_content:
-                    vids = extract_full_videos_only(videos_tab_content, 3)
+                    candidate_vids.extend(extract_full_videos_only(videos_tab_content, 15))
                 elif videos_tab_params:
-                    # 만약 첫 호출에서 홈 탭이 열렸다면 추출한 정확한 동영상 탭 params 로 즉시 재호출
                     res2 = requests.post(b_url, json={"context": INNERTUBE_CONTEXT, "browseId": cid, "params": videos_tab_params}, headers=COMMON_HEADERS, timeout=3)
                     if res2.status_code == 200:
-                        vids = extract_full_videos_only(res2.json(), 3)
-                else:
-                    vids = extract_full_videos_only(r_json, 3)
-
-                if vids:
+                        tabs2 = res2.json().get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
+                        for t2 in tabs2:
+                            tr2 = t2.get('tabRenderer', {})
+                            if tr2.get('content'):
+                                candidate_vids.extend(extract_full_videos_only(tr2.get('content'), 15))
+                if candidate_vids:
                     is_live = True
         except Exception:
             pass
 
-        # 더본 공식 서브채널(TBK, 더본 테이스티 등)처럼 본영상이 아예 없고 쇼츠만 올리는 채널일 때만 쇼츠 보충
-        if len(vids) < 3 and ch.get('allow_shorts_fallback'):
+    # 2순위: 검색 API (최신순 CAI= 및 기본 검색 병합 후 채널 소유자 검증 + 날짜 파싱으로 최신순 강제 정렬)
+    if len(candidate_vids) < 3 and ch.get('search_query'):
+        s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
+        for sparam in ["CAI=", None]:
             try:
-                s_payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZzaG9ydHPyBgUKA5oBAA=="}
-                res_s = requests.post(b_url, json=s_payload, headers=COMMON_HEADERS, timeout=3)
-                if res_s.status_code == 200:
-                    short_vids = extract_shorts_only(res_s.json(), 3 - len(vids))
-                    if short_vids:
-                        vids.extend(short_vids)
+                payload = {"context": INNERTUBE_CONTEXT, "query": ch['search_query']}
+                if sparam:
+                    payload["params"] = sparam
+                res = requests.post(s_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
+                if res.status_code == 200:
+                    found = extract_full_videos_only(
+                        res.json(), 18,
+                        owner_keywords=ch.get('owner_keywords'),
+                        target_cid=cid
+                    )
+                    existing_links = {v['link'] for v in candidate_vids}
+                    for fv in found:
+                        if fv['link'] not in existing_links:
+                            candidate_vids.append(fv)
+                            existing_links.add(fv['link'])
+                    if found:
                         is_live = True
             except Exception:
                 pass
 
-    # 2순위: 채널 소유자 검증이 포함된 최신순 일반 영상 검색
-    if not vids and ch.get('search_query'):
+    # 수집된 모든 후보 영상을 경과 시간(분) 기준으로 엄격하게 최신순 정렬 & 1~2년 전 구형 인기 영상 제거
+    vids = sort_and_filter_latest_videos(candidate_vids, max_count=3, reject_older_than_months=7)
+
+    # 더본 공식 서브채널(TBK, 더본 테이스티 등)처럼 본영상이 없고 쇼츠만 올리는 채널일 때 쇼츠 보충
+    if len(vids) < 3 and cid.startswith('UC') and ch.get('allow_shorts_fallback'):
         try:
-            s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
-            payload = {"context": INNERTUBE_CONTEXT, "query": ch['search_query'], "params": "CAI="}
-            res = requests.post(s_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
-            if res.status_code == 200:
-                vids = extract_full_videos_only(
-                    res.json(), 3,
-                    owner_keywords=ch.get('owner_keywords'),
-                    target_cid=cid
-                )
-                if vids:
+            s_payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZzaG9ydHPyBgUKA5oBAA=="}
+            res_s = requests.post(b_url, json=s_payload, headers=COMMON_HEADERS, timeout=3)
+            if res_s.status_code == 200:
+                short_vids = extract_shorts_only(res_s.json(), 3 - len(vids))
+                if short_vids:
+                    vids.extend(short_vids)
                     is_live = True
         except Exception:
             pass
 
-    # 3순위: 최후 백업 스냅샷 (최신 모욕죄 영상 및 탐코 최신 영상 포함)
-    if not vids:
+    # 3순위: 최신 백업 스냅샷으로 빈칸 보충
+    if len(vids) < 3:
+        existing_links = {v['link'] for v in vids}
         for item in ch.get('fallback', []):
-            vid = item['vid']
-            vids.append({
-                'title': item['title'], 'link': f"https://www.youtube.com/watch?v={vid}",
-                'thumb': f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg", 'date': item['date'], 'views': item['views']
-            })
+            if len(vids) >= 3:
+                break
+            link = f"https://www.youtube.com/watch?v={item['vid']}"
+            if link not in existing_links:
+                vids.append({
+                    'title': item['title'], 'link': link,
+                    'thumb': f"https://i.ytimg.com/vi/{item['vid']}/mqdefault.jpg",
+                    'date': item['date'], 'views': item['views']
+                })
 
-    return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids, 'is_live': is_live}
+    return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids[:3], 'is_live': is_live}
 
 def fetch_youtube_hot_search():
-    """유튜브 전체에서 '백종원 더본코리아' 최신 일반 영상을 검색합니다."""
+    """유튜브 전체에서 '백종원 더본코리아' 최신 영상을 검색한 뒤 날짜 파싱으로 진짜 최신 영상만 정렬합니다."""
     s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
     payload = {"context": INNERTUBE_CONTEXT, "query": "백종원 더본코리아", "params": "CAI="}
     videos = []
@@ -616,7 +796,7 @@ def fetch_youtube_hot_search():
         if res.status_code == 200:
             data = res.json()
             def walk(obj):
-                if len(videos) >= 8:
+                if len(videos) >= 20:
                     return
                 if isinstance(obj, dict):
                     if 'videoRenderer' in obj:
@@ -625,13 +805,13 @@ def fetch_youtube_hot_search():
                         if vid and vid not in seen_vids:
                             t_runs = vr.get('title', {}).get('runs', [])
                             title = t_runs[0].get('text', '') if t_runs else vr.get('title', {}).get('simpleText', '')
-                            if not any(k in title for k in ['백종원', '더본', '빽다방', '홍콩반점', '연돈', '오재나']):
+                            if not any(k in title for k in ['백종원', '더본', '빽다방', '홍콩반점', '연돈', '오재나', '빽보이', '신공']):
                                 return
                             owner_runs = vr.get('ownerText', {}).get('runs', []) or vr.get('longBylineText', {}).get('runs', [])
                             channel_name = owner_runs[0].get('text', '유튜브') if owner_runs else '유튜브'
-                            pub = vr.get('publishedTimeText', {}).get('simpleText', '최신')
+                            pub = vr.get('publishedTimeText', {}).get('simpleText', '')
                             v_raw = vr.get('viewCountText', {}).get('simpleText', '') or "".join(r.get('text', '') for r in vr.get('viewCountText', {}).get('runs', []))
-                            if '시청 중' in v_raw:
+                            if '시청 중' in v_raw or not pub:
                                 return
                             seen_vids.add(vid)
                             videos.append({
@@ -649,7 +829,7 @@ def fetch_youtube_hot_search():
             walk(data)
     except Exception:
         pass
-    return videos
+    return sort_and_filter_latest_videos(videos, max_count=8, reject_older_than_months=3)
 
 # --- 5. HTML 대시보드 생성 ---
 def generate_html_string():
@@ -684,7 +864,7 @@ def generate_html_string():
         """
 
     news_html = ""
-    for n in news:
+    for idx, n in enumerate(news):
         badge_class = "badge-risk" if n['cat_code'] == 'RISK' else ("badge-pr" if n['cat_code'] == 'PR' else "badge-gen")
         dup_cnt = len(n.get('dups', []))
         dup_html = ""
@@ -693,8 +873,9 @@ def generate_html_string():
             dup_html = f"<div class='dup-box' style='margin-top:5px; padding:6px 10px; background:#12141a; border-left:3px solid #ffd54f; font-size:0.82em; color:#aaa;'>📢 동일 보도자료 복붙 언론사 ({dup_cnt}곳): {dup_links}</div>"
         
         safe_raw = n.get('pure_title', n['title']).replace('"', '&quot;')
+        safe_reason = n.get('ai_reason', '').replace('"', '&quot;')
         news_html += f"""
-        <li class="news-item" data-cat="{n['cat_code']}" data-dups="{dup_cnt}" data-raw="{safe_raw}">
+        <li class="news-item" data-idx="{idx}" data-cat="{n['cat_code']}" data-dups="{dup_cnt}" data-raw="{safe_raw}" data-ai-cat="{n['cat_code']}" data-ai-reason="{safe_reason}">
             <div class="meta-line"><span class="n-badge {badge_class}">{n['cat_label']}</span> {n['date']}</div>
             <a href="{n['link']}" target="_blank">▶ {n['title']}</a>
             {dup_html}
@@ -716,7 +897,7 @@ def generate_html_string():
     yt_critic_html = ""
     yt_official_html = ""
     for ch in youtube_data:
-        status_badge = "<span style='font-size:0.72em; color:#00e676; margin-left:6px;'>🟢 LIVE</span>" if ch.get('is_live') else "<span style='font-size:0.72em; color:#8b949e; margin-left:6px;'>⚪ 백업</span>"
+        status_badge = "<span style='font-size:0.72em; color:#00e676; margin-left:6px;'>🟢 LIVE (최신순)</span>" if ch.get('is_live') else "<span style='font-size:0.72em; color:#8b949e; margin-left:6px;'>⚪ 최신스냅샷</span>"
         block = f"<div class='channel-name'><a href='{ch['handle']}' target='_blank'>[{ch['name']}] ↗</a>{status_badge}</div>"
         for v in ch['videos']:
             block += f"""
@@ -794,7 +975,7 @@ def generate_html_string():
         @media (max-width: 768px) {{ .container {{ grid-template-columns: 1fr; }} }}
 
         .card {{ background: var(--bg-card); padding: 22px; border-radius: 12px; border: 1px solid var(--border-color); box-shadow: 0 6px 16px rgba(0,0,0,0.4); display: flex; flex-direction: column; }}
-        h2 {{ color: var(--accent-blue); font-size: 1.2em; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin: 0 0 15px 0; display: flex; justify-content: space-between; align-items: center; }}
+        h2 {{ color: var(--accent-blue); font-size: 1.2em; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin: 0 0 15px 0; display: flex; justify-content: space-between; align-items: center; gap: 6px; }}
         a {{ color: var(--text-main); text-decoration: none; transition: 0.15s; line-height: 1.45; display: inline-block; }}
         a:hover {{ color: var(--accent-red); text-decoration: underline; }}
 
@@ -814,7 +995,7 @@ def generate_html_string():
         .tab-btn {{ background: #232834; color: #aaa; border: 1px solid #343b4a; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8em; font-weight: bold; }}
         .tab-btn.active {{ background: var(--accent-blue); color: #000; border-color: var(--accent-blue); }}
 
-        .kw-mgr-btn {{ background: #262c3a; color: var(--accent-gold); border: 1px solid #3d4659; padding: 5px 11px; border-radius: 6px; cursor: pointer; font-size: 0.78em; font-weight: bold; flex-shrink: 0; }}
+        .kw-mgr-btn {{ background: #262c3a; color: var(--accent-gold); border: 1px solid #3d4659; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.76em; font-weight: bold; flex-shrink: 0; }}
         .kw-mgr-btn:hover {{ background: #323a4d; }}
         .kw-manager-panel {{ display: none; background: #12151c; border: 1px solid #343b4a; border-radius: 8px; padding: 14px; margin-top: 10px; margin-bottom: 14px; }}
         .kw-sec-title {{ font-size: 0.8em; font-weight: bold; margin: 10px 0 6px 0; display: flex; justify-content: space-between; align-items: center; }}
@@ -878,7 +1059,7 @@ def generate_html_string():
                 <span>📌 우선 추출·보존 핵심 명사 (복합명사 쪼개짐 방지 · 클릭 시 삭제)</span>
             </div>
             <div class="kw-input-row">
-                <input type="text" id="inputRadarBoost" class="kw-input" placeholder="우선 추출할 핵심 명사 입력 (예: 정보유출, 가맹해지, 모욕죄)" onkeydown="if(event.key==='Enter') addRadarKw('BOOST')">
+                <input type="text" id="inputRadarBoost" class="kw-input" placeholder="우선 추출할 핵심 명사 입력 (예: 신공떡볶이, 청구포기, 우녹스)" onkeydown="if(event.key==='Enter') addRadarKw('BOOST')">
                 <button class="kw-add-btn" onclick="addRadarKw('BOOST')">+ 추가</button>
             </div>
             <div id="tagsRadarBoost" class="kw-tag-wrap"></div>
@@ -948,28 +1129,47 @@ def generate_html_string():
             </ul>
         </div>
 
-        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 -->
+        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 (AI 문맥 추론 + Gemini LLM 연동) -->
         <div class="card">
             <h2>
-                <span>📰 실시간 뉴스 판독기</span>
-                <button class="kw-mgr-btn" onclick="togglePanel('kwManagerPanel')">⚙️ 키워드 관리</button>
+                <span>📰 AI 실시간 뉴스 판독기</span>
+                <div style="display:flex; gap:5px;">
+                    <button class="kw-mgr-btn" style="color:#4fc3f7; border-color:#0284c7;" onclick="togglePanel('aiJudgePanel')">🤖 AI 판독</button>
+                    <button class="kw-mgr-btn" onclick="togglePanel('kwManagerPanel')">⚙️ 사전 관리</button>
+                </div>
             </h2>
+
+            <!-- Gemini LLM 실시간 문맥 재판독 패널 -->
+            <div id="aiJudgePanel" class="kw-manager-panel" style="margin-top:0; border-color:#0284c7;">
+                <div class="kw-sec-title" style="color:#4fc3f7;">
+                    <span>🧠 Gemini AI 심층 문맥 판독 (내장 AI 문맥 엔진 기본 가동중)</span>
+                </div>
+                <div style="font-size:0.77em; color:#9ca3af; margin-bottom:8px; line-height:1.4;">
+                    기본적으로 파이썬 & 브라우저 내장 <b>구문·문맥 스코어링 AI</b>가 기사의 반어법/이탈 문맥까지 자동 판독합니다.<br>
+                    더 정밀한 LLM 판독을 원하시면 Gemini API 키를 입력해 즉시 재분류할 수 있습니다.
+                </div>
+                <div class="kw-input-row">
+                    <input type="password" id="inputGeminiKey" class="kw-input" placeholder="AIzaSy... (Google AI Studio 무료 API 키 입력 시 브라우저 저장)">
+                    <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="runClientGeminiJudge()">⚡ Gemini 즉시 판독</button>
+                </div>
+                <div id="aiJudgeStatus" style="font-size:0.76em; color:#00e676;"></div>
+            </div>
 
             <div id="kwManagerPanel" class="kw-manager-panel" style="margin-top:0;">
                 <div class="kw-sec-title" style="color:#ff5252;">
-                    <span>🚨 쟁점·리스크 키워드 (최우선 적용 · 클릭 시 삭제)</span>
+                    <span>🚨 쟁점·리스크 보조 키워드 (클릭 시 삭제)</span>
                 </div>
                 <div class="kw-input-row">
-                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 유출, 해지, 모욕죄)" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
+                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력 (예: 떠나가자, 유출, 모욕죄)" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
                     <button class="kw-add-btn" onclick="addNewsKw('RISK')">+ 추가</button>
                 </div>
                 <div id="tagsRisk" class="kw-tag-wrap"></div>
 
                 <div class="kw-sec-title" style="color:#ffd54f;">
-                    <span>🎺 자본언플·홍보 키워드 (클릭 시 삭제)</span>
+                    <span>🎺 자본언플·홍보 보조 키워드 (클릭 시 삭제)</span>
                 </div>
                 <div class="kw-input-row">
-                    <input type="text" id="inputPrKw" class="kw-input" placeholder="언플 단어 입력 (예: 승부수, 뚫는다, 시연)" onkeydown="if(event.key==='Enter') addNewsKw('PR')">
+                    <input type="text" id="inputPrKw" class="kw-input" placeholder="언플 단어 입력 (예: 우녹스, 맞손, 시연)" onkeydown="if(event.key==='Enter') addNewsKw('PR')">
                     <button class="kw-add-btn" onclick="addNewsKw('PR')">+ 추가</button>
                 </div>
                 <div id="tagsPr" class="kw-tag-wrap"></div>
@@ -1080,8 +1280,9 @@ def generate_html_string():
         const DEFAULT_RADAR_KW = {default_radar_kw_json};
         const RAW_TITLES = {raw_titles_json};
 
-        const NEWS_STORAGE_KEY = 'theborn_news_kw_v8';
-        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v8';
+        const NEWS_STORAGE_KEY = 'theborn_news_kw_v9';
+        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v9';
+        const GEMINI_KEY_STORAGE = 'theborn_gemini_api_key_v9';
 
         let currentFilter = 'ALL';
         let userNewsKw = loadStored(NEWS_STORAGE_KEY, DEFAULT_NEWS_KW);
@@ -1274,6 +1475,24 @@ def generate_html_string():
             reclassifyAllNews();
         }}
 
+        // 브라우저 내장 AI 문맥 추론기 (Python ai_contextual_classify 와 동일한 구문 가중치 로직)
+        const JS_RISK_PATTERNS = [
+            [/믿었는데|떠나가자|다\\s*떠나|등\\s*돌린|한숨|눈물|곡소리/, '가맹점주 이탈·원성'],
+            [/가맹.*해지|폐업|폐점|문\\s*닫|철수|퇴출|순감소|급감/, '매장 감소·폐점'],
+            [/유출|침해|해킹|KISA|개인정보|보안/, '개인정보·보안 사고'],
+            [/고소|소송|모욕죄|무혐의|혐의없음|피고소|청구포기|패소/, '법적 분쟁·고소'],
+            [/위생|원산지|우려|논란|비판|지적|도마|꼼수|책임\\s*회피|갑질|공정위/, '경영 논란·비판'],
+            [/휘청|부진|적자|하락|폭락|급락|반토막|수렁/, '실적·주가 악화']
+        ];
+        const JS_PR_PATTERNS = [
+            [/우녹스|파트너십|맞손|업무협약|MOU|협약|협력|공동\\s*개발|데이터화|탑재/, '해외·B2B 제휴 언플'],
+            [/피자\\s*배달|배달\\s*알바|일일\\s*배달|라이더\\s*변신|직접\\s*배달|치즈킥|소방서|선물/, '유튜브·배달쇼 언플'],
+            [/소유진|아트하우스|대저택|미술관|내조|애셋맘/, '오너 일가 언플'],
+            [/신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|이벤트|나눔점|기부|체험행사/, '신메뉴·이벤트 홍보'],
+            [/글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|대박|완판/, '글로벌·신사업 홍보'],
+            [/\\[똑똑한|\\[유통가|브리핑|단신/, '보도자료 묶음 홍보']
+        ];
+
         function reclassifyAllNews() {{
             let counts = {{ ALL: 0, RISK: 0, PR: 0, GEN: 0 }};
             document.querySelectorAll('#newsList .news-item').forEach(li => {{
@@ -1287,20 +1506,49 @@ def generate_html_string():
                     return;
                 }}
 
-                let cat = 'GEN';
-                let label = '📰 일반동향';
-                let matchedRisk = userNewsKw.RISK.find(rk => rawTitle.includes(rk));
-                let matchedPr = userNewsKw.PR.find(pk => rawTitle.includes(pk));
+                // Gemini LLM이 직접 판정한 결과가 있으면 최우선 존중
+                const llmLocked = li.getAttribute('data-llm-locked') === '1';
+                let cat = li.getAttribute('data-ai-cat') || 'GEN';
+                let label = '';
 
-                if (matchedRisk) {{
-                    cat = 'RISK';
-                    label = totalCnt >= 2 ? `🚨 쟁점 확산 (${{totalCnt}}건 · ${{matchedRisk}})` : `🚨 쟁점·리스크 (${{matchedRisk}})`;
-                }} else if (matchedPr) {{
-                    cat = 'PR';
-                    label = totalCnt >= 2 ? `🎺 보도자료 복붙 (${{totalCnt}}건 · ${{matchedPr}})` : `🎺 자본언플·홍보 (${{matchedPr}})`;
-                }} else if (totalCnt >= 3) {{
-                    cat = 'PR';
-                    label = `🎺 보도자료 복붙 (${{totalCnt}}건 살포)`;
+                if (llmLocked) {{
+                    const r = li.getAttribute('data-ai-reason') || 'AI문맥';
+                    if (cat === 'RISK') label = totalCnt >= 2 ? `🚨 Gemini판독: 쟁점 (${{totalCnt}}건 · ${{r}})` : `🚨 Gemini판독: 리스크 (${{r}})`;
+                    else if (cat === 'PR') label = totalCnt >= 2 ? `🎺 Gemini판독: 복붙언플 (${{totalCnt}}건 · ${{r}})` : `🎺 Gemini판독: 홍보·언플 (${{r}})`;
+                    else label = `📰 Gemini판독: 일반 (${{r}})`;
+                }} else {{
+                    // 내장 문맥 스코어링 + 사용자 키워드 결합 판독
+                    let riskScore = 0, prScore = 0;
+                    let riskReason = '', prReason = '';
+
+                    JS_RISK_PATTERNS.forEach(([reg, r]) => {{
+                        if (reg.test(rawTitle)) {{ riskScore += 3; if (!riskReason) riskReason = r; }}
+                    }});
+                    JS_PR_PATTERNS.forEach(([reg, r]) => {{
+                        if (reg.test(rawTitle)) {{ prScore += 2.5; if (!prReason) prReason = r; }}
+                    }});
+
+                    const matchedRiskKw = userNewsKw.RISK.find(rk => rawTitle.includes(rk));
+                    const matchedPrKw = userNewsKw.PR.find(pk => rawTitle.includes(pk));
+                    if (matchedRiskKw) {{ riskScore += 1.5; if (!riskReason) riskReason = matchedRiskKw; }}
+                    if (matchedPrKw) {{ prScore += 1.0; if (!prReason) prReason = matchedPrKw; }}
+
+                    if (/믿었는데|떠나가자|논란\\s*속|위기\\s*속|결국|싸늘/.test(rawTitle)) {{
+                        riskScore += 4.0;
+                        riskReason = '가맹점 이탈·비판';
+                    }}
+
+                    if (riskScore > 0 && riskScore >= prScore * 0.8) {{
+                        cat = 'RISK';
+                        label = totalCnt >= 2 ? `🚨 AI판독: 쟁점확산 (${{totalCnt}}건 · ${{riskReason}})` : `🚨 AI판독: 리스크 (${{riskReason}})`;
+                    }} else if (prScore > 0 || totalCnt >= 3) {{
+                        cat = 'PR';
+                        const r = prReason || '보도자료 살포';
+                        label = totalCnt >= 2 ? `🎺 AI판독: 복붙언플 (${{totalCnt}}건 · ${{r}})` : `🎺 AI판독: 홍보·언플 (${{r}})`;
+                    }} else {{
+                        cat = 'GEN';
+                        label = '📰 AI판독: 업계·일반동향';
+                    }}
                 }}
 
                 li.setAttribute('data-cat', cat);
@@ -1325,6 +1573,60 @@ def generate_html_string():
                 const f = btn.getAttribute('data-filter');
                 if (tabLabels[f]) btn.textContent = tabLabels[f];
             }});
+        }}
+
+        async function runClientGeminiJudge() {{
+            const keyInput = document.getElementById('inputGeminiKey');
+            const statusEl = document.getElementById('aiJudgeStatus');
+            const apiKey = keyInput.value.trim() || localStorage.getItem(GEMINI_KEY_STORAGE) || '';
+            if (!apiKey) {{
+                statusEl.style.color = '#ff5252';
+                statusEl.textContent = '⚠️ Google AI Studio API 키를 입력해주세요.';
+                return;
+            }}
+            localStorage.setItem(GEMINI_KEY_STORAGE, apiKey);
+            statusEl.style.color = '#ffd54f';
+            statusEl.textContent = '⏳ Gemini 2.5 Flash 모델이 전체 뉴스 문맥을 정밀 판독 중입니다...';
+
+            const items = [];
+            document.querySelectorAll('#newsList .news-item').forEach((li, i) => {{
+                items.push({{
+                    idx: i,
+                    title: li.querySelector('a')?.innerText || '',
+                    dups: parseInt(li.getAttribute('data-dups') || '0', 10)
+                }});
+            }});
+
+            const prompt = `당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 RISK(오너리스크, 가맹점주 이탈/폐점, 고소/분쟁, 위생/원산지 논란, 홍보쇼에 대한 비판적 보도), PR(기업 홍보, 신메뉴/이벤트, 우녹스 등 해외 MOU/협약, 유튜브 일일배달/선행 언플, 소유진 일상 과시, 보도자료 복붙), GEN(단순 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 JSON 배열로 답하세요.\\n출력 형식: [{{"idx":0, "cat":"RISK", "reason":"가맹점주 이탈 비판"}}]\\n\\n뉴스 목록:\\n` + JSON.stringify(items);
+
+            try {{
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${{apiKey}}`, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        contents: [{{ parts: [{{ text: prompt }}] }}],
+                        generationConfig: {{ responseMimeType: 'application/json', temperature: 0.1 }}
+                    }})
+                }});
+                const data = await res.json();
+                const textOut = data.candidates[0].content.parts[0].text;
+                const parsed = JSON.parse(textOut);
+                const listEls = document.querySelectorAll('#newsList .news-item');
+                parsed.forEach(item => {{
+                    const li = listEls[item.idx];
+                    if (li && ['RISK', 'PR', 'GEN'].includes(item.cat)) {{
+                        li.setAttribute('data-ai-cat', item.cat);
+                        li.setAttribute('data-ai-reason', item.reason || 'AI문맥');
+                        li.setAttribute('data-llm-locked', '1');
+                    }}
+                }});
+                reclassifyAllNews();
+                statusEl.style.color = '#00e676';
+                statusEl.textContent = `✅ Gemini LLM 문맥 판독 완료! (${{parsed.length}}건 재분류 적용됨)`;
+            }} catch (err) {{
+                statusEl.style.color = '#ff5252';
+                statusEl.textContent = '❌ API 호출 실패: 키를 확인해주세요 (' + err.message + ')';
+            }}
         }}
 
         function copyAllPythonConfig() {{
@@ -1356,6 +1658,12 @@ def generate_html_string():
             document.getElementById('ytOfficialBox').style.display = (group === 'OFFICIAL') ? 'block' : 'none';
         }}
 
+        // 저장된 Gemini API 키가 있으면 자동 로드 및 실행
+        const savedGemKey = localStorage.getItem(GEMINI_KEY_STORAGE);
+        if (savedGemKey) {{
+            document.getElementById('inputGeminiKey').value = savedGemKey;
+        }}
+
         renderRadarTags();
         recomputeRadarKeywords();
         renderNewsTags();
@@ -1382,4 +1690,4 @@ if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V8.1 업데이트 완료!")
+    print("✅ theborn_dashboard.html V9 업데이트 완료!")
