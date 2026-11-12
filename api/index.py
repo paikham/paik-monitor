@@ -10,13 +10,24 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 
 # ==============================================================================
-# 🤖 [선택 설정] 서버 사이드 Gemini AI 판독용 API 키 (없어도 내장 AI 문맥 엔진이 작동하며,
-# 웹 화면 우측 상단 '🤖 AI 판독 설정' 버튼에서 브라우저용 키를 직접 넣을 수도 있습니다.)
+# 🤖 [AI 판독 설정] 사용자님의 AI Studio 키 및 할당량 보유 모델 우선순위 리스트
+# (비율 제한 표 기준 RPD가 가장 넉넉한 3.5-flash-lite / 3.1-flash-lite / gemma-4-31b 우선 사용)
 # ==============================================================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+AVAILABLE_AI_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemma-4-31b-it",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash"
+]
+
 # ==============================================================================
-# 🎯 [사용자 직접 관리 구역 1] 뉴스 분류 키워드 사전 (AI 문맥 엔진 보조 및 수동 오버라이드용)
+# 🎯 [사용자 직접 관리 구역 1] 뉴스 분류 키워드 사전
 # ==============================================================================
 NEWS_KEYWORDS = {
     "RISK": [
@@ -35,7 +46,7 @@ NEWS_KEYWORDS = {
         "오픈", "공략", "시연", "프로모션", "제공", "500원", "파격딜", "당근페이", "이벤트", "행보",
         "특가", "상생", "협약", "MOU", "선보", "강화", "확대", "진출", "개최", "성료", "나눔",
         "승부수", "성공", "뚫는다", "유통망", "블루오션", "세일즈", "세일", "외식왕", "근황", "파브리",
-        "반전", "풍미", "러시", "완판", "일일 배달", "라이더 변신", "한 판 더", "선물"
+        "반전", "풍미", "러시", "완판", "일일 배달", "하루 배달", "라이더", "한 판 더", "선물", "오토바이"
     ],
     "SPAM": [
         "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅"
@@ -116,7 +127,7 @@ def get_dc_best_posts():
     except Exception as e:
         return [{'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '-', 'views': '-', 'comments': '-', 'date': '-'}]
 
-# --- 2. 🧠 AI 문맥 기반 뉴스 판독기 (구문 패턴 추론 + Gemini API 하이브리드) ---
+# --- 2. 🧠 투트랙 뉴스 수집 + 고정밀 문맥 판독기 + 다중 모델 AI 엔진 ---
 STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
 
 def extract_tokens(title):
@@ -124,50 +135,44 @@ def extract_tokens(title):
     words = re.findall(r'[가-힣A-Za-z0-9]{2,}', clean_t)
     return {w for w in words if w not in STOP_WORDS}
 
-# 문맥 패턴 사전 (단순 키워드 1개가 아니라 문맥/구문 구조를 포착)
 CONTEXT_PATTERNS = {
     "RISK_RULES": [
-        (r"(믿었는데|떠나가자|다\s*떠나|등\s*돌린|한숨|눈물|곡소리|비명)", "가맹점주 이탈·원성"),
+        (r"(믿었는데|떠나가자|다\s*떠나|등\s*돌린|한숨|눈물|곡소리|비명|외면)", "가맹점주 이탈·원성"),
         (r"(가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|급감)", "매장 감소·폐점 리스크"),
         (r"(유출|침해|해킹|KISA|개인정보|보안)", "개인정보·보안 사고"),
         (r"(고소|소송|모욕죄|무혐의|혐의없음|피고소|법정|청구포기|패소|재판)", "법적 분쟁·고소 남발"),
-        (r"(위생|원산지|우려|논란|비판|지적|도마|꼼수|외주\s*탓|책임\s*회피|갑질|공정위|국감)", "경영 논란·비판"),
+        (r"(위생|원산지|우려|논란|비판|지적|도마|꼼수|외주\s*탓|책임\s*회피|갑질|공정위|국감|가중)", "경영 논란·비판"),
         (r"(휘청|부진|적자|하락|폭락|급락|반토막|신저가|마진콜|경고등|먹구름|수렁)", "실적·주가 악화")
     ],
     "PR_RULES": [
         (r"(우녹스|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재)", "해외·B2B 제휴 언플"),
-        (r"(피자\s*배달|배달\s*알바|일일\s*배달|라이더\s*변신|직접\s*배달|치즈킥|소방서|선물)", "유튜브·배달쇼 언플"),
+        (r"(피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\s*배달|하루\s*배달|치즈킥|소방서)", "유튜브·배달쇼 언플"),
         (r"(소유진|아트하우스|대저택|미술관|내조|애셋맘)", "오너 일가 화제성 언플"),
-        (r"(신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|100원|500원|이벤트|나눔점|기부|체험행사)", "신메뉴·이벤트 홍보"),
-        (r"(글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|열풍|대박|완판)", "글로벌·신사업 홍보"),
+        (r"(신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|100원|500원|이벤트|나눔점|기부|체험행사|가치를\s*더하다)", "신메뉴·이벤트 홍보"),
+        (r"(글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|열풍|대박|완판|꽂힌\s*소스|새\s*기회)", "글로벌·소스 홍보"),
         (r"(\[똑똑한|\[유통가|\[푸드|브리핑|단신)", "보도자료 묶음 홍보")
     ]
 }
 
 def ai_contextual_classify(cluster_titles_text, dup_count):
-    """
-    단순 단어 포함 여부가 아닌 문장 전체의 문맥(Context)과 보도자료 복붙 밀도를 종합 분석합니다.
-    (예: '사장님들 다 떠나가자 직접 오토바이 타고 홍보 나섰다' -> 홍보 단어가 있어도 '떠나가자' 비판 문맥을 우선 포착해 RISK 판정)
-    """
-    risk_score = 0
-    pr_score = 0
+    """띄어쓰기 변형('피자 시키셨죠...배달', '피자 시켰더니')까지 모두 포착하는 정밀 문맥 판독기"""
+    risk_score = 0.0
+    pr_score = 0.0
     risk_reasons = []
     pr_reasons = []
 
-    # 1단계: 구문/문맥 정규식 스캔 (가중치 +3)
     for pattern, reason in CONTEXT_PATTERNS["RISK_RULES"]:
         if re.search(pattern, cluster_titles_text):
-            risk_score += 3
+            risk_score += 3.5
             if reason not in risk_reasons:
                 risk_reasons.append(reason)
 
     for pattern, reason in CONTEXT_PATTERNS["PR_RULES"]:
         if re.search(pattern, cluster_titles_text):
-            pr_score += 2.5
+            pr_score += 3.0
             if reason not in pr_reasons:
                 pr_reasons.append(reason)
 
-    # 2단계: 세부 키워드 스캔 (가중치 +1.2)
     for rk in NEWS_KEYWORDS["RISK"]:
         if rk in cluster_titles_text:
             risk_score += 1.2
@@ -180,22 +185,20 @@ def ai_contextual_classify(cluster_titles_text, dup_count):
             if not pr_reasons:
                 pr_reasons.append(pk)
 
-    # 3단계: 복합 문맥 보정 (비판적 인용구 + 홍보 행위가 결합된 기사는 '비판/리스크'로 강제 승격)
-    if re.search(r"(믿었는데|떠나가자|논란\s*속|위기\s*속|결국|뒤늦게|싸늘)", cluster_titles_text):
-        risk_score += 4.0
-        if "위기 돌파용 쇼·이탈 비판" not in risk_reasons:
-            risk_reasons.insert(0, "위기·이탈 비판")
+    if re.search(r"(믿었는데|떠나가자|논란\s*속|위기\s*속|결국|뒤늦게|싸늘|가중|수렁)", cluster_titles_text):
+        risk_score += 4.5
+        if "가맹점 이탈·위기 비판" not in risk_reasons:
+            risk_reasons.insert(0, "가맹점 이탈·위기 비판")
 
     total_cnt = 1 + dup_count
 
-    # 4단계: 최종 판정 및 라벨 생성
     if risk_score > 0 and risk_score >= pr_score * 0.8:
         reason_str = risk_reasons[0] if risk_reasons else "리스크"
         if total_cnt >= 2:
             return "RISK", f"🚨 AI판독: 쟁점확산 ({total_cnt}건 · {reason_str})", reason_str
         return "RISK", f"🚨 AI판독: 리스크 ({reason_str})", reason_str
 
-    if pr_score > 0 or total_cnt >= 3:
+    if pr_score > 0 or total_cnt >= 2:
         reason_str = pr_reasons[0] if pr_reasons else "보도자료 살포"
         if total_cnt >= 2:
             return "PR", f"🎺 AI판독: 복붙언플 ({total_cnt}건 · {reason_str})", reason_str
@@ -203,59 +206,102 @@ def ai_contextual_classify(cluster_titles_text, dup_count):
 
     return "GEN", "📰 AI판독: 업계·일반동향", "일반동향"
 
-def refine_news_with_gemini_llm(news_clusters, api_key):
-    """GEMINI_API_KEY가 설정되어 있을 경우 Gemini 2.5 Flash 모델을 호출해 한 번에 정밀 판독합니다."""
-    if not api_key or not news_clusters:
-        return
-    try:
-        items_payload = [
-            {"idx": i, "title": c["title"], "dup_count": len(c.get("dups", []))}
-            for i, c in enumerate(news_clusters)
-        ]
-        prompt = (
-            "당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 "
-            "RISK(오너리스크, 가맹점 이탈/폐점, 고소/분쟁, 위생/원산지 논란, 주가/실적 부진, 홍보 행위에 대한 비판적 보도), "
-            "PR(기업 홍보, 신메뉴/이벤트, 해외 MOU/협약, 유튜브 일일배달/선행 홍보, 소유진 일상 과시, 보도자료 복붙), "
-            "GEN(단순 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 JSON 배열로 답하세요.\n"
-            "출력 형식: [{\"idx\":0, \"cat\":\"RISK\", \"reason\":\"가맹점주 이탈 비판\"}, ...]\n\n"
-            f"뉴스 목록:\n{json.dumps(items_payload, ensure_ascii=False)}"
-        )
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+def call_google_ai_with_fallback(prompt, api_key):
+    """
+    신규 AQ. 키 포맷과 AIza 키 포맷을 모두 지원하기 위해 헤더(x-goog-api-key, Authorization)와 쿼리를 병행하며,
+    할당량이 남아 있는 모델(gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemma-4-31b-it 등)을 순차 시도합니다.
+    """
+    if not api_key:
+        return None, None
+    for model_name in AVAILABLE_AI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={quote(api_key)}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key
+        }
+        # Gemma 계열 모델은 responseMimeType: application/json 미지원 경우가 있어 분기 처리
+        gen_cfg = {"temperature": 0.1}
+        if not model_name.startswith("gemma"):
+            gen_cfg["responseMimeType"] = "application/json"
+
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}
+            "generationConfig": gen_cfg
         }
-        res = requests.post(url, json=payload, timeout=5)
-        if res.status_code == 200:
-            text_out = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            parsed = json.loads(text_out)
-            for item in parsed:
-                idx = item.get("idx")
-                cat = item.get("cat")
-                reason = item.get("reason", "AI문맥")
-                if isinstance(idx, int) and 0 <= idx < len(news_clusters) and cat in ("RISK", "PR", "GEN"):
-                    c = news_clusters[idx]
-                    total_cnt = 1 + len(c.get("dups", []))
-                    c["cat_code"] = cat
-                    c["ai_reason"] = reason
-                    if cat == "RISK":
-                        c["cat_label"] = f"🚨 AI정밀: 쟁점 ({total_cnt}건 · {reason})" if total_cnt >= 2 else f"🚨 AI정밀: 리스크 ({reason})"
-                    elif cat == "PR":
-                        c["cat_label"] = f"🎺 AI정밀: 복붙언플 ({total_cnt}건 · {reason})" if total_cnt >= 2 else f"🎺 AI정밀: 홍보·언플 ({reason})"
-                    else:
-                        c["cat_label"] = f"📰 AI정밀: 일반 ({reason})"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=4.5)
+            if res.status_code != 200 and api_key.startswith("AQ."):
+                # AQ. 토큰일 경우 Bearer 인증 헤더로 재시도
+                headers_bearer = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+                res = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+                    headers=headers_bearer, json=payload, timeout=4.5
+                )
+            if res.status_code == 200:
+                r_json = res.json()
+                candidates = r_json.get("candidates") or []
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts") or []
+                    if parts and parts[0].get("text"):
+                        return parts[0]["text"], model_name
+        except Exception:
+            continue
+    return None, None
+
+def refine_news_with_gemini_llm(news_clusters, api_key):
+    if not api_key or not news_clusters:
+        return None
+    items_payload = [
+        {"idx": i, "title": c["title"], "dup_count": len(c.get("dups", []))}
+        for i, c in enumerate(news_clusters)
+    ]
+    prompt = (
+        "당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 "
+        "RISK(오너리스크, 가맹점 이탈/해지/폐점, 고소/무혐의/분쟁, 개인정보 유출/KISA 신고, 위생/원산지 논란, 홍보쇼에 대한 비판 보도), "
+        "PR(기업 홍보, 신메뉴/이벤트, 이탈리아 우녹스 오븐 협약 등 해외사업 언플, 유튜브 피자배달 알바/선행 언플, 소유진 일상 과시, 보도자료 복붙), "
+        "GEN(단순 타사 포함 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 순수 JSON 배열로만 답하세요.\n"
+        "출력 예시: [{\"idx\":0, \"cat\":\"RISK\", \"reason\":\"가맹점주 이탈 비판\"}]\n\n"
+        f"뉴스 목록:\n{json.dumps(items_payload, ensure_ascii=False)}"
+    )
+    text_out, used_model = call_google_ai_with_fallback(prompt, api_key)
+    if not text_out:
+        return None
+    try:
+        json_match = re.search(r'\[.*\]', text_out, re.DOTALL)
+        parsed = json.loads(json_match.group(0) if json_match else text_out)
+        for item in parsed:
+            idx = item.get("idx")
+            cat = item.get("cat")
+            reason = item.get("reason", "AI문맥")
+            if isinstance(idx, int) and 0 <= idx < len(news_clusters) and cat in ("RISK", "PR", "GEN"):
+                c = news_clusters[idx]
+                total_cnt = 1 + len(c.get("dups", []))
+                c["cat_code"] = cat
+                c["ai_reason"] = reason
+                if cat == "RISK":
+                    c["cat_label"] = f"🚨 {used_model}: 쟁점 ({total_cnt}건 · {reason})" if total_cnt >= 2 else f"🚨 {used_model}: 리스크 ({reason})"
+                elif cat == "PR":
+                    c["cat_label"] = f"🎺 {used_model}: 복붙언플 ({total_cnt}건 · {reason})" if total_cnt >= 2 else f"🎺 {used_model}: 홍보·언플 ({reason})"
+                else:
+                    c["cat_label"] = f"📰 {used_model}: 일반 ({reason})"
+        return used_model
     except Exception:
-        pass
+        return None
 
 def get_latest_news():
     raw_list = []
     seen_titles = set()
 
-    for sort_mode in ['1', '0']:
-        naver_q = quote("더본코리아 OR 백종원 OR 빽다방")
-        naver_url = f"https://search.naver.com/search.naver?where=news&query={naver_q}&sort={sort_mode}"
+    # [핵심 개선] 홍보성 보도자료 도배에 리스크 기사가 밀려나지 않도록 '일반 트랙' + '리스크 전용 트랙' 투트랙 수집
+    naver_queries = [
+        ("더본코리아 OR 백종원 OR 빽다방", '1'),
+        ("더본코리아 OR 백종원 논란 OR 고소 OR 해지 OR 유출 OR 위생 OR 소송 OR 폐업", '0'),
+        ("더본코리아 OR 백종원 OR 빽다방", '0')
+    ]
+    for q_str, sort_mode in naver_queries:
+        naver_url = f"https://search.naver.com/search.naver?where=news&query={quote(q_str)}&sort={sort_mode}"
         try:
-            res = requests.get(naver_url, headers=COMMON_HEADERS, timeout=4.5)
+            res = requests.get(naver_url, headers=COMMON_HEADERS, timeout=4.0)
             soup = BeautifulSoup(decode_html(res), 'html.parser')
             for item in soup.select('.news_area, .bx'):
                 title_el = item.select_one('.news_tit') or item.select_one('a[href*="news.naver.com"]')
@@ -264,7 +310,7 @@ def get_latest_news():
                 title = (title_el.get('title') or title_el.text or '').strip()
                 if not title or any(sp in title for sp in NEWS_KEYWORDS["SPAM"]):
                     continue
-                if not any(k in title for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공']):
+                if not any(k in title for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공', '역전우동']):
                     continue
                 key = re.sub(r'\W+', '', title)[:18]
                 if key in seen_titles:
@@ -280,28 +326,32 @@ def get_latest_news():
         except Exception:
             pass
 
-    q_encoded = quote("백종원 OR 더본코리아 OR 빽다방 OR 빽보이피자 when:7d")
-    rss_url = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
-    try:
-        res = requests.get(rss_url, headers=COMMON_HEADERS, timeout=5)
-        feed = feedparser.parse(res.content)
-        for entry in feed.entries[:60]:
-            full_t = entry.title
-            if any(sp in full_t for sp in NEWS_KEYWORDS["SPAM"]):
-                continue
-            parts = full_t.rsplit(' - ', 1)
-            pure_t = parts[0].strip()
-            press = parts[1].strip() if len(parts) > 1 else '뉴스'
-            if not any(k in pure_t for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공']):
-                continue
-            key = re.sub(r'\W+', '', pure_t)[:18]
-            if key in seen_titles:
-                continue
-            seen_titles.add(key)
-            date_str = entry.published[5:16] if hasattr(entry, 'published') else ''
-            raw_list.append({'pure_title': pure_t, 'press': press, 'link': entry.link, 'date': date_str})
-    except Exception:
-        pass
+    rss_queries = [
+        "백종원 OR 더본코리아 OR 빽다방 OR 빽보이피자 when:7d",
+        "(백종원 OR 더본코리아) (논란 OR 고소 OR 해지 OR 유출 OR 무혐의 OR 위생 OR 휘청) when:14d"
+    ]
+    for rq in rss_queries:
+        rss_url = f"https://news.google.com/rss/search?q={quote(rq)}&hl=ko&gl=KR&ceid=KR:ko"
+        try:
+            res = requests.get(rss_url, headers=COMMON_HEADERS, timeout=4.5)
+            feed = feedparser.parse(res.content)
+            for entry in feed.entries[:45]:
+                full_t = entry.title
+                if any(sp in full_t for sp in NEWS_KEYWORDS["SPAM"]):
+                    continue
+                parts = full_t.rsplit(' - ', 1)
+                pure_t = parts[0].strip()
+                press = parts[1].strip() if len(parts) > 1 else '뉴스'
+                if not any(k in pure_t for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공', '역전우동']):
+                    continue
+                key = re.sub(r'\W+', '', pure_t)[:18]
+                if key in seen_titles:
+                    continue
+                seen_titles.add(key)
+                date_str = entry.published[5:16] if hasattr(entry, 'published') else ''
+                raw_list.append({'pure_title': pure_t, 'press': press, 'link': entry.link, 'date': date_str})
+        except Exception:
+            pass
 
     if not raw_list:
         return [{'title': '뉴스 로딩 실패', 'pure_title': '뉴스 로딩 실패', 'link': '#', 'date': '-', 'cat_code': 'GEN', 'cat_label': '오류', 'dups': [], 'ai_reason': ''}]
@@ -321,14 +371,13 @@ def get_latest_news():
         else:
             clusters.append({'main': item, 'tokens': tokens, 'dups': []})
 
-    final_news = []
-    for cl in clusters[:25]:
+    scored_clusters = []
+    for cl in clusters:
         main = cl['main']
         dups = cl['dups']
         all_titles_in_cluster = " ".join([main['pure_title']] + [d['pure_title'] for d in dups])
         cat_code, cat_label, ai_reason = ai_contextual_classify(all_titles_in_cluster, len(dups))
-
-        final_news.append({
+        scored_clusters.append({
             'title': f"{main['pure_title']} - {main['press']}",
             'pure_title': all_titles_in_cluster,
             'link': main['link'],
@@ -338,6 +387,11 @@ def get_latest_news():
             'ai_reason': ai_reason,
             'dups': dups
         })
+
+    # 리스크(RISK) 기사가 홍보(PR) 도배에 묻히지 않도록 RISK 클러스터를 상단에 우선 배치한 뒤 총 26개 추출
+    risk_items = [c for c in scored_clusters if c['cat_code'] == 'RISK']
+    other_items = [c for c in scored_clusters if c['cat_code'] != 'RISK']
+    final_news = (risk_items[:12] + other_items)[:26]
 
     if GEMINI_API_KEY:
         refine_news_with_gemini_llm(final_news, GEMINI_API_KEY)
@@ -528,10 +582,6 @@ def format_view_text(v_str):
     return v_str
 
 def parse_ko_age_to_minutes(date_str):
-    """
-    '3시간 전', '2일 전', '3주 전', '1년 전', '2026-11-02' 등을 분(minute) 단위 경과 시간으로 변환합니다.
-    과거 인기 영상(1년 전, 2년 전)을 걸러내고 무조건 최신순으로 정렬하기 위한 핵심 함수입니다.
-    """
     if not date_str:
         return 999999
     s = str(date_str).strip()
@@ -543,7 +593,6 @@ def parse_ko_age_to_minutes(date_str):
         unit = m.group(2)
         mult = {'초': 0.02, '분': 1, '시간': 60, '일': 1440, '주': 10080, '개월': 43200, '달': 43200, '년': 525600}
         return int(val * mult.get(unit, 1440))
-    # YYYY-MM-DD 형식일 경우
     m_iso = re.match(r'(\d{4})-(\d{2})-(\d{2})', s)
     if m_iso:
         try:
@@ -556,12 +605,10 @@ def parse_ko_age_to_minutes(date_str):
     return 500000
 
 def sort_and_filter_latest_videos(videos, max_count=3, reject_older_than_months=7):
-    """수집된 영상 후보들을 최신순(경과시간 오름차순)으로 정렬하고 1~2년 전 구형 인기 영상을 배제합니다."""
     if not videos:
         return []
     for v in videos:
         v['_age_min'] = parse_ko_age_to_minutes(v.get('date', ''))
-    
     max_age_min = reject_older_than_months * 43200
     recent_vids = [v for v in videos if v['_age_min'] <= max_age_min]
     target_list = recent_vids if len(recent_vids) >= 2 else videos
@@ -597,7 +644,6 @@ def resolve_exact_channel_id(ch):
     return ""
 
 def extract_full_videos_only(data_node, max_scan=18, owner_keywords=None, target_cid=None):
-    """그리드/검색 결과에서 최대 18개의 정규 영상을 스캔해 날짜 파싱 후 최신순 정렬이 가능하도록 합니다."""
     videos = []
     seen_vids = set()
 
@@ -605,8 +651,7 @@ def extract_full_videos_only(data_node, max_scan=18, owner_keywords=None, target
         if len(videos) >= max_scan:
             return
         if isinstance(obj, dict):
-            # 채널 홈 탭의 대표 영상/인기 영상 선반(channelFeaturedContentRenderer, shelfRenderer)은 건너뜀
-            if 'channelFeaturedContentRenderer' in obj or ' channelVideoPlayerRenderer' in obj:
+            if 'channelFeaturedContentRenderer' in obj or 'channelVideoPlayerRenderer' in obj:
                 return
             if 'videoRenderer' in obj:
                 vr = obj['videoRenderer']
@@ -691,10 +736,8 @@ def fetch_single_channel(ch):
     is_live = False
     b_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
 
-    # 1순위: 채널의 기본 탭 목록을 먼저 조회한 뒤, '동영상(Videos)' 탭의 순수 기본 params(최신순)로 호출
     if cid.startswith('UC'):
         try:
-            # 먼저 기본 채널 브라우징 또는 순수 동영상 탭 기본값("EgZ2aWRlb3M=") 호출
             payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZ2aWRlb3M="}
             res = requests.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
             if res.status_code == 200:
@@ -728,7 +771,6 @@ def fetch_single_channel(ch):
         except Exception:
             pass
 
-    # 2순위: 검색 API (최신순 CAI= 및 기본 검색 병합 후 채널 소유자 검증 + 날짜 파싱으로 최신순 강제 정렬)
     if len(candidate_vids) < 3 and ch.get('search_query'):
         s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
         for sparam in ["CAI=", None]:
@@ -753,10 +795,8 @@ def fetch_single_channel(ch):
             except Exception:
                 pass
 
-    # 수집된 모든 후보 영상을 경과 시간(분) 기준으로 엄격하게 최신순 정렬 & 1~2년 전 구형 인기 영상 제거
     vids = sort_and_filter_latest_videos(candidate_vids, max_count=3, reject_older_than_months=7)
 
-    # 더본 공식 서브채널(TBK, 더본 테이스티 등)처럼 본영상이 없고 쇼츠만 올리는 채널일 때 쇼츠 보충
     if len(vids) < 3 and cid.startswith('UC') and ch.get('allow_shorts_fallback'):
         try:
             s_payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZzaG9ydHPyBgUKA5oBAA=="}
@@ -769,7 +809,6 @@ def fetch_single_channel(ch):
         except Exception:
             pass
 
-    # 3순위: 최신 백업 스냅샷으로 빈칸 보충
     if len(vids) < 3:
         existing_links = {v['link'] for v in vids}
         for item in ch.get('fallback', []):
@@ -786,7 +825,6 @@ def fetch_single_channel(ch):
     return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids[:3], 'is_live': is_live}
 
 def fetch_youtube_hot_search():
-    """유튜브 전체에서 '백종원 더본코리아' 최신 영상을 검색한 뒤 날짜 파싱으로 진짜 최신 영상만 정렬합니다."""
     s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
     payload = {"context": INNERTUBE_CONTEXT, "query": "백종원 더본코리아", "params": "CAI="}
     videos = []
@@ -932,6 +970,7 @@ def generate_html_string():
     default_news_kw_json = json.dumps(NEWS_KEYWORDS, ensure_ascii=False)
     default_radar_kw_json = json.dumps(RADAR_KEYWORDS, ensure_ascii=False)
     raw_titles_json = json.dumps(all_titles_for_radar, ensure_ascii=False)
+    ai_models_json = json.dumps(AVAILABLE_AI_MODELS, ensure_ascii=False)
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -1129,7 +1168,7 @@ def generate_html_string():
             </ul>
         </div>
 
-        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 (AI 문맥 추론 + Gemini LLM 연동) -->
+        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 (투트랙 수집 + 다중 모델 AI 폴백) -->
         <div class="card">
             <h2>
                 <span>📰 AI 실시간 뉴스 판독기</span>
@@ -1139,18 +1178,16 @@ def generate_html_string():
                 </div>
             </h2>
 
-            <!-- Gemini LLM 실시간 문맥 재판독 패널 -->
             <div id="aiJudgePanel" class="kw-manager-panel" style="margin-top:0; border-color:#0284c7;">
                 <div class="kw-sec-title" style="color:#4fc3f7;">
-                    <span>🧠 Gemini AI 심층 문맥 판독 (내장 AI 문맥 엔진 기본 가동중)</span>
+                    <span>🧠 다중 모델 AI 폴백 판독 (3.5-flash-lite / 3.1-flash-lite / gemma-4-31b 순환)</span>
                 </div>
                 <div style="font-size:0.77em; color:#9ca3af; margin-bottom:8px; line-height:1.4;">
-                    기본적으로 파이썬 & 브라우저 내장 <b>구문·문맥 스코어링 AI</b>가 기사의 반어법/이탈 문맥까지 자동 판독합니다.<br>
-                    더 정밀한 LLM 판독을 원하시면 Gemini API 키를 입력해 즉시 재분류할 수 있습니다.
+                    상위 모델 쿼터 소진 시 할당량이 남아 있는 경량 모델들을 순서대로 자동 호출하며, 신규 <code>AQ.</code> 키 헤더 인증과 내장 구문 AI 엔진을 동시 지원합니다.
                 </div>
                 <div class="kw-input-row">
-                    <input type="password" id="inputGeminiKey" class="kw-input" placeholder="AIzaSy... (Google AI Studio 무료 API 키 입력 시 브라우저 저장)">
-                    <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="runClientGeminiJudge()">⚡ Gemini 즉시 판독</button>
+                    <input type="password" id="inputGeminiKey" class="kw-input" value="" placeholder="API 키 입력 (한 번 입력하면 내 브라우저에만 자동 저장됨)">
+                    <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="runClientGeminiJudge()">⚡ 가용 모델로 즉시 판독</button>
                 </div>
                 <div id="aiJudgeStatus" style="font-size:0.76em; color:#00e676;"></div>
             </div>
@@ -1279,10 +1316,11 @@ def generate_html_string():
         const DEFAULT_NEWS_KW = {default_news_kw_json};
         const DEFAULT_RADAR_KW = {default_radar_kw_json};
         const RAW_TITLES = {raw_titles_json};
+        const AI_MODEL_LIST = {ai_models_json};
 
-        const NEWS_STORAGE_KEY = 'theborn_news_kw_v9';
-        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v9';
-        const GEMINI_KEY_STORAGE = 'theborn_gemini_api_key_v9';
+        const NEWS_STORAGE_KEY = 'theborn_news_kw_v91';
+        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v91';
+        const GEMINI_KEY_STORAGE = 'theborn_gemini_api_key_v91';
 
         let currentFilter = 'ALL';
         let userNewsKw = loadStored(NEWS_STORAGE_KEY, DEFAULT_NEWS_KW);
@@ -1475,21 +1513,21 @@ def generate_html_string():
             reclassifyAllNews();
         }}
 
-        // 브라우저 내장 AI 문맥 추론기 (Python ai_contextual_classify 와 동일한 구문 가중치 로직)
+        // 브라우저 내장 고정밀 구문/문맥 스코어링 (띄어쓰기 변형 완벽 대응)
         const JS_RISK_PATTERNS = [
-            [/믿었는데|떠나가자|다\\s*떠나|등\\s*돌린|한숨|눈물|곡소리/, '가맹점주 이탈·원성'],
+            [/믿었는데|떠나가자|다\\s*떠나|등\\s*돌린|한숨|눈물|곡소리|외면/, '가맹점주 이탈·원성'],
             [/가맹.*해지|폐업|폐점|문\\s*닫|철수|퇴출|순감소|급감/, '매장 감소·폐점'],
             [/유출|침해|해킹|KISA|개인정보|보안/, '개인정보·보안 사고'],
             [/고소|소송|모욕죄|무혐의|혐의없음|피고소|청구포기|패소/, '법적 분쟁·고소'],
-            [/위생|원산지|우려|논란|비판|지적|도마|꼼수|책임\\s*회피|갑질|공정위/, '경영 논란·비판'],
+            [/위생|원산지|우려|논란|비판|지적|도마|꼼수|책임\\s*회피|갑질|공정위|가중/, '경영 논란·비판'],
             [/휘청|부진|적자|하락|폭락|급락|반토막|수렁/, '실적·주가 악화']
         ];
         const JS_PR_PATTERNS = [
             [/우녹스|파트너십|맞손|업무협약|MOU|협약|협력|공동\\s*개발|데이터화|탑재/, '해외·B2B 제휴 언플'],
-            [/피자\\s*배달|배달\\s*알바|일일\\s*배달|라이더\\s*변신|직접\\s*배달|치즈킥|소방서|선물/, '유튜브·배달쇼 언플'],
+            [/피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\\s*배달|하루\\s*배달|치즈킥|소방서/, '유튜브·배달쇼 언플'],
             [/소유진|아트하우스|대저택|미술관|내조|애셋맘/, '오너 일가 언플'],
-            [/신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|이벤트|나눔점|기부|체험행사/, '신메뉴·이벤트 홍보'],
-            [/글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|대박|완판/, '글로벌·신사업 홍보'],
+            [/신제품|신메뉴|출시|선보|프로모션|할인|특가|공짜|이벤트|나눔점|기부|체험행사|가치를\\s*더하다/, '신메뉴·이벤트 홍보'],
+            [/글로벌|유럽|투트랙|공략|확대|진출|푸드위크|시연회|대박|완판|꽂힌\\s*소스|새\\s*기회/, '글로벌·소스 홍보'],
             [/\\[똑똑한|\\[유통가|브리핑|단신/, '보도자료 묶음 홍보']
         ];
 
@@ -1506,42 +1544,41 @@ def generate_html_string():
                     return;
                 }}
 
-                // Gemini LLM이 직접 판정한 결과가 있으면 최우선 존중
                 const llmLocked = li.getAttribute('data-llm-locked') === '1';
                 let cat = li.getAttribute('data-ai-cat') || 'GEN';
                 let label = '';
 
                 if (llmLocked) {{
                     const r = li.getAttribute('data-ai-reason') || 'AI문맥';
-                    if (cat === 'RISK') label = totalCnt >= 2 ? `🚨 Gemini판독: 쟁점 (${{totalCnt}}건 · ${{r}})` : `🚨 Gemini판독: 리스크 (${{r}})`;
-                    else if (cat === 'PR') label = totalCnt >= 2 ? `🎺 Gemini판독: 복붙언플 (${{totalCnt}}건 · ${{r}})` : `🎺 Gemini판독: 홍보·언플 (${{r}})`;
-                    else label = `📰 Gemini판독: 일반 (${{r}})`;
+                    const mName = li.getAttribute('data-llm-model') || 'AI';
+                    if (cat === 'RISK') label = totalCnt >= 2 ? `🚨 ${{mName}}: 쟁점 (${{totalCnt}}건 · ${{r}})` : `🚨 ${{mName}}: 리스크 (${{r}})`;
+                    else if (cat === 'PR') label = totalCnt >= 2 ? `🎺 ${{mName}}: 복붙언플 (${{totalCnt}}건 · ${{r}})` : `🎺 ${{mName}}: 홍보·언플 (${{r}})`;
+                    else label = `📰 ${{mName}}: 일반 (${{r}})`;
                 }} else {{
-                    // 내장 문맥 스코어링 + 사용자 키워드 결합 판독
                     let riskScore = 0, prScore = 0;
                     let riskReason = '', prReason = '';
 
                     JS_RISK_PATTERNS.forEach(([reg, r]) => {{
-                        if (reg.test(rawTitle)) {{ riskScore += 3; if (!riskReason) riskReason = r; }}
+                        if (reg.test(rawTitle)) {{ riskScore += 3.5; if (!riskReason) riskReason = r; }}
                     }});
                     JS_PR_PATTERNS.forEach(([reg, r]) => {{
-                        if (reg.test(rawTitle)) {{ prScore += 2.5; if (!prReason) prReason = r; }}
+                        if (reg.test(rawTitle)) {{ prScore += 3.0; if (!prReason) prReason = r; }}
                     }});
 
                     const matchedRiskKw = userNewsKw.RISK.find(rk => rawTitle.includes(rk));
                     const matchedPrKw = userNewsKw.PR.find(pk => rawTitle.includes(pk));
-                    if (matchedRiskKw) {{ riskScore += 1.5; if (!riskReason) riskReason = matchedRiskKw; }}
+                    if (matchedRiskKw) {{ riskScore += 1.2; if (!riskReason) riskReason = matchedRiskKw; }}
                     if (matchedPrKw) {{ prScore += 1.0; if (!prReason) prReason = matchedPrKw; }}
 
-                    if (/믿었는데|떠나가자|논란\\s*속|위기\\s*속|결국|싸늘/.test(rawTitle)) {{
-                        riskScore += 4.0;
-                        riskReason = '가맹점 이탈·비판';
+                    if (/믿었는데|떠나가자|논란\\s*속|위기\\s*속|결국|싸늘|가중|수렁/.test(rawTitle)) {{
+                        riskScore += 4.5;
+                        riskReason = '가맹점 이탈·위기 비판';
                     }}
 
                     if (riskScore > 0 && riskScore >= prScore * 0.8) {{
                         cat = 'RISK';
                         label = totalCnt >= 2 ? `🚨 AI판독: 쟁점확산 (${{totalCnt}}건 · ${{riskReason}})` : `🚨 AI판독: 리스크 (${{riskReason}})`;
-                    }} else if (prScore > 0 || totalCnt >= 3) {{
+                    }} else if (prScore > 0 || totalCnt >= 2) {{
                         cat = 'PR';
                         const r = prReason || '보도자료 살포';
                         label = totalCnt >= 2 ? `🎺 AI판독: 복붙언플 (${{totalCnt}}건 · ${{r}})` : `🎺 AI판독: 홍보·언플 (${{r}})`;
@@ -1575,18 +1612,50 @@ def generate_html_string():
             }});
         }}
 
+        async function tryCallModel(modelName, apiKey, prompt) {{
+            const genCfg = {{ temperature: 0.1 }};
+            if (!modelName.startsWith('gemma')) {{
+                genCfg.responseMimeType = 'application/json';
+            }}
+            const bodyStr = JSON.stringify({{
+                contents: [{{ parts: [{{ text: prompt }}] }}],
+                generationConfig: genCfg
+            }});
+
+            // 1차: x-goog-api-key 헤더 + query 파라미터 호출
+            let res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent?key=${{encodeURIComponent(apiKey)}}`, {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }},
+                body: bodyStr
+            }});
+
+            // 2차: AQ. 키 등 OAuth/Bearer 형식일 경우 Authorization 헤더로 재시도
+            if (!res.ok && apiKey.startsWith('AQ.')) {{
+                res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent`, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json', 'Authorization': `Bearer ${{apiKey}}` }},
+                    body: bodyStr
+                }});
+            }}
+
+            const data = await res.json();
+            if (!res.ok || data.error || !data.candidates || !data.candidates.length) {{
+                const errMsg = data.error ? data.error.message : `HTTP ${{res.status}}`;
+                throw new Error(`[${{modelName}}] ${{errMsg}}`);
+            }}
+            return data.candidates[0]?.content?.parts?.[0]?.text || '';
+        }}
+
         async function runClientGeminiJudge() {{
             const keyInput = document.getElementById('inputGeminiKey');
             const statusEl = document.getElementById('aiJudgeStatus');
-            const apiKey = keyInput.value.trim() || localStorage.getItem(GEMINI_KEY_STORAGE) || '';
+            const apiKey = keyInput.value.trim();
             if (!apiKey) {{
                 statusEl.style.color = '#ff5252';
-                statusEl.textContent = '⚠️ Google AI Studio API 키를 입력해주세요.';
+                statusEl.textContent = '⚠️ API 키를 입력해주세요.';
                 return;
             }}
             localStorage.setItem(GEMINI_KEY_STORAGE, apiKey);
-            statusEl.style.color = '#ffd54f';
-            statusEl.textContent = '⏳ Gemini 2.5 Flash 모델이 전체 뉴스 문맥을 정밀 판독 중입니다...';
 
             const items = [];
             document.querySelectorAll('#newsList .news-item').forEach((li, i) => {{
@@ -1597,36 +1666,38 @@ def generate_html_string():
                 }});
             }});
 
-            const prompt = `당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 RISK(오너리스크, 가맹점주 이탈/폐점, 고소/분쟁, 위생/원산지 논란, 홍보쇼에 대한 비판적 보도), PR(기업 홍보, 신메뉴/이벤트, 우녹스 등 해외 MOU/협약, 유튜브 일일배달/선행 언플, 소유진 일상 과시, 보도자료 복붙), GEN(단순 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 JSON 배열로 답하세요.\\n출력 형식: [{{"idx":0, "cat":"RISK", "reason":"가맹점주 이탈 비판"}}]\\n\\n뉴스 목록:\\n` + JSON.stringify(items);
+            const prompt = `당신은 더본코리아(백종원) 미디어 워치독 AI입니다. 다음 뉴스 목록의 문맥을 분석해 각 기사를 RISK(오너리스크, 가맹점주 이탈/폐점/해지, 고소/무혐의/분쟁, 개인정보 유출, 위생/원산지 논란, 홍보쇼에 대한 비판적 보도), PR(기업 홍보, 신메뉴/이벤트, 우녹스 오븐 협약 등 해외 MOU, 유튜브 피자배달 알바/선행 언플, 소유진 일상 과시, 보도자료 복붙), GEN(단순 타사 포함 업계 트렌드 언급) 중 하나로 분류하고 짧은 사유(6자 이내)를 순수 JSON 배열로만 답하세요.\\n출력 형식: [{{"idx":0, "cat":"RISK", "reason":"가맹점주 이탈 비판"}}]\\n\\n뉴스 목록:\\n` + JSON.stringify(items);
 
-            try {{
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${{apiKey}}`, {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{
-                        contents: [{{ parts: [{{ text: prompt }}] }}],
-                        generationConfig: {{ responseMimeType: 'application/json', temperature: 0.1 }}
-                    }})
-                }});
-                const data = await res.json();
-                const textOut = data.candidates[0].content.parts[0].text;
-                const parsed = JSON.parse(textOut);
-                const listEls = document.querySelectorAll('#newsList .news-item');
-                parsed.forEach(item => {{
-                    const li = listEls[item.idx];
-                    if (li && ['RISK', 'PR', 'GEN'].includes(item.cat)) {{
-                        li.setAttribute('data-ai-cat', item.cat);
-                        li.setAttribute('data-ai-reason', item.reason || 'AI문맥');
-                        li.setAttribute('data-llm-locked', '1');
-                    }}
-                }});
-                reclassifyAllNews();
-                statusEl.style.color = '#00e676';
-                statusEl.textContent = `✅ Gemini LLM 문맥 판독 완료! (${{parsed.length}}건 재분류 적용됨)`;
-            }} catch (err) {{
-                statusEl.style.color = '#ff5252';
-                statusEl.textContent = '❌ API 호출 실패: 키를 확인해주세요 (' + err.message + ')';
+            let lastErr = '';
+            for (const modelName of AI_MODEL_LIST) {{
+                statusEl.style.color = '#ffd54f';
+                statusEl.textContent = `⏳ [${{modelName}}] 모델로 문맥 판독 시도 중...`;
+                try {{
+                    const textOut = await tryCallModel(modelName, apiKey, prompt);
+                    const jsonMatch = textOut.match(/\\[.*\\]/s);
+                    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : textOut);
+                    const listEls = document.querySelectorAll('#newsList .news-item');
+                    parsed.forEach(item => {{
+                        const li = listEls[item.idx];
+                        if (li && ['RISK', 'PR', 'GEN'].includes(item.cat)) {{
+                            li.setAttribute('data-ai-cat', item.cat);
+                            li.setAttribute('data-ai-reason', item.reason || 'AI문맥');
+                            li.setAttribute('data-llm-model', modelName);
+                            li.setAttribute('data-llm-locked', '1');
+                        }}
+                    }});
+                    reclassifyAllNews();
+                    statusEl.style.color = '#00e676';
+                    statusEl.textContent = `✅ [${{modelName}}] 모델 문맥 판독 완료! (${{parsed.length}}건 정밀 재분류됨)`;
+                    return;
+                }} catch (err) {{
+                    lastErr = err.message;
+                }}
             }}
+
+            statusEl.style.color = '#ffd54f';
+            statusEl.textContent = `ℹ️ 외부 API 키 인증 제한(${{lastErr.slice(0, 55)}}...)으로 내장 고정밀 구문 AI 판독기가 적용되었습니다.`;
+            reclassifyAllNews();
         }}
 
         function copyAllPythonConfig() {{
@@ -1658,7 +1729,6 @@ def generate_html_string():
             document.getElementById('ytOfficialBox').style.display = (group === 'OFFICIAL') ? 'block' : 'none';
         }}
 
-        // 저장된 Gemini API 키가 있으면 자동 로드 및 실행
         const savedGemKey = localStorage.getItem(GEMINI_KEY_STORAGE);
         if (savedGemKey) {{
             document.getElementById('inputGeminiKey').value = savedGemKey;
@@ -1690,4 +1760,4 @@ if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V9 업데이트 완료!")
+    print("✅ theborn_dashboard.html V9.1 업데이트 완료!")
