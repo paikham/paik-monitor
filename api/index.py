@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import requests
 from bs4 import BeautifulSoup
 import feedparser
@@ -80,39 +81,49 @@ def decode_html(res):
     except UnicodeDecodeError:
         return res.content.decode('cp949', 'replace')
 
-# --- 1. 디시인사이드 골목식당 갤러리 개념글 (50선) ---
+# --- 1. 디시인사이드 골목식당 갤러리 개념글 (재시도 로직 탑재로 빈 목록 반환 방지) ---
 def get_dc_best_posts():
     url = "https://gall.dcinside.com/board/lists/?id=bjwstreet&exception_mode=recommend"
-    headers = {**COMMON_HEADERS, 'Referer': 'https://gall.dcinside.com/'}
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(decode_html(response), 'html.parser')
-        posts = soup.select('.us-post')
-        
-        results = []
-        for post in posts[:50]:
-            title_element = post.select_one('.gall_tit a:not(.icon_pic_n)') or post.select_one('.gall_tit a')
-            if title_element and not title_element.text.startswith('공지'):
-                title = title_element.text.strip()
-                href = title_element.get('href', '')
-                link = "https://gall.dcinside.com" + href if href.startswith('/') else href
-                
+    headers = {
+        **COMMON_HEADERS,
+        'Referer': 'https://gall.dcinside.com/board/lists/?id=bjwstreet',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    }
+    for attempt in range(2):
+        try:
+            response = requests.get(url, headers=headers, timeout=5)
+            soup = BeautifulSoup(decode_html(response), 'html.parser')
+            posts = soup.select('.us-post')
+            
+            results = []
+            for post in posts[:50]:
                 num_el = post.select_one('.gall_num')
-                post_no = num_el.text.strip() if num_el else re.sub(r'\D+', '', href)[:10]
-                upvotes = post.select_one('.gall_recommend').text.strip() if post.select_one('.gall_recommend') else '0'
-                views = post.select_one('.gall_count').text.strip() if post.select_one('.gall_count') else '0'
-                date = post.select_one('.gall_date').text.strip() if post.select_one('.gall_date') else '-'
-                reply_el = post.select_one('.reply_num')
-                comments = reply_el.text.strip() if reply_el else "[0]"
-                
-                results.append({
-                    'no': post_no, 'title': title, 'link': link, 
-                    'upvotes': upvotes, 'views': views, 
-                    'comments': comments, 'date': date
-                })
-        return results if results else [{'no': '0', 'title': '개념글 목록이 비어있습니다.', 'link': '#', 'upvotes': '0', 'views': '0', 'comments': '[0]', 'date': '-'}]
-    except Exception as e:
-        return [{'no': '0', 'title': f'갤러리 로딩 실패 ({str(e)[:15]})', 'link': '#', 'upvotes': '0', 'views': '0', 'comments': '[0]', 'date': '-'}]
+                post_no = num_el.text.strip() if num_el else ''
+                if not post_no.isdigit():
+                    continue
+                title_element = post.select_one('.gall_tit a:not(.icon_pic_n)') or post.select_one('.gall_tit a')
+                if title_element and not title_element.text.startswith('공지'):
+                    title = title_element.text.strip()
+                    href = title_element.get('href', '')
+                    link = "https://gall.dcinside.com" + href if href.startswith('/') else href
+                    
+                    upvotes = post.select_one('.gall_recommend').text.strip() if post.select_one('.gall_recommend') else '0'
+                    views = post.select_one('.gall_count').text.strip() if post.select_one('.gall_count') else '0'
+                    date = post.select_one('.gall_date').text.strip() if post.select_one('.gall_date') else '-'
+                    reply_el = post.select_one('.reply_num')
+                    comments = reply_el.text.strip() if reply_el else "[0]"
+                    
+                    results.append({
+                        'no': post_no, 'title': title, 'link': link, 
+                        'upvotes': upvotes, 'views': views, 
+                        'comments': comments, 'date': date
+                    })
+            if len(results) >= 10:
+                return results
+            time.sleep(0.4)
+        except Exception:
+            time.sleep(0.4)
+    return [{'no': 'ERR', 'title': '갤러리 일시 응답 지연 (새로고침 해주세요)', 'link': '#', 'upvotes': '0', 'views': '0', 'comments': '[0]', 'date': '-'}]
 
 # --- 2. 4단계 한국어 기사 문맥 대조 & 물타기 언플 판독 엔진 ---
 STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
@@ -146,7 +157,7 @@ STANDARD_PR_PATTERNS = [
     (r"(\[똑똑한|\[유통가|\[푸드|브리핑|단신|꽂힌\s*소스시장|성장동력\s*확보)", "보도자료·업계 홍보")
 ]
 
-def classify_news_v12(cluster_titles_text, dup_count):
+def classify_news_v13(cluster_titles_text, dup_count):
     total_cnt = 1 + dup_count
 
     for pattern, reason in HARD_RISK_PATTERNS:
@@ -271,7 +282,7 @@ def get_latest_news():
         main = cl['main']
         dups = cl['dups']
         all_titles_in_cluster = " ".join([main['pure_title']] + [d['pure_title'] for d in dups])
-        cat_code, cat_label, ai_reason = classify_news_v12(all_titles_in_cluster, len(dups))
+        cat_code, cat_label, ai_reason = classify_news_v13(all_titles_in_cluster, len(dups))
         scored_clusters.append({
             'title': f"{main['pure_title']} - {main['press']}",
             'pure_title': all_titles_in_cluster,
@@ -373,31 +384,29 @@ def get_stock_and_disclosures(ticker_code="475560"):
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 4. 📺 유튜브 최신 영상 전용 수집 엔진 (2단계 실제 동영상 탭 추출 + 구형 영상 완벽 차단 + 제목 중복 제거) ---
+# --- 4. 📺 유튜브 최신 롱폼 전용 수집 엔진 (V13: 핸들 자동해석 + 순수 동영상 탭 직행 + 최초공개 포맷 완벽 대응) ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
         "handle": "https://www.youtube.com/@studio_OZN",
-        "id": "", "sample_vid": "INoddmJf6dE",
-        "allow_shorts_fallback": False,
+        "id": "", "sample_vid": "ZwHixkCDwaQ",
         "owner_keywords": ["오재나", "studio_OZN"],
-        "search_query": "김재환의 오재나",
+        "search_query": "김재환의 오재나 백종원",
         "fallback": [
-            {"vid": "INoddmJf6dE", "title": "모욕죄는 백종원을 위한 법인가? #에펨코리아 #모욕죄 #김재환PD #오재나 #펨코", "date": "2주 전", "views": "729,344회"},
-            {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "3주 전", "views": "633,226회"},
-            {"vid": "4fALTQTUldU", "title": "연돈볼카츠 합의안 타결! 나머지 점주들은 신났을까? #백종원 #김재환 #더본코리아", "date": "1개월 전", "views": "1,462,077회"}
+            {"vid": "ZwHixkCDwaQ", "title": "백종원과 변호사X는 몇 명이나 고소했을까? #오재나 #김재환PD #모욕죄 #모욕죄고소 #펨코 #DC #종토방", "date": "오늘", "views": "13,784회"},
+            {"vid": "INoddmJf6dE", "title": "모욕죄는 백종원을 위한 법인가? #에펨코리아 #모욕죄 #김재환PD #오재나 #펨코", "date": "2주 전", "views": "731,925회"},
+            {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "3주 전", "views": "634,231회"}
         ]
     },
     {
         "name": "탐코 : 탐욕의 코리아", "group": "CRITIC",
         "handle": "https://www.youtube.com/@tamkorea",
         "id": "UC1rn5BnUdP1OGI6vnxh0IbQ", "sample_vid": "LbNF4wQJ9sk",
-        "allow_shorts_fallback": False,
         "owner_keywords": ["탐코", "탐욕의 코리아", "tamkorea"],
         "search_query": "탐코 탐욕의 코리아 백종원",
         "fallback": [
-            {"vid": "LbNF4wQJ9sk", "title": "숫자가 가리키는 백종원의 종말", "date": "2주 전", "views": "18,280회"},
-            {"vid": "RkFbcgPNofs", "title": "무너진 백종원 대기업의 꿈", "date": "2주 전", "views": "21,371회"},
+            {"vid": "LbNF4wQJ9sk", "title": "숫자가 가리키는 백종원의 종말", "date": "2주 전", "views": "18,388회"},
+            {"vid": "RkFbcgPNofs", "title": "무너진 백종원 대기업의 꿈", "date": "2주 전", "views": "21,497회"},
             {"vid": "cpvolw4BJqg", "title": "백종원을 파멸시킬 세 부류의 인간", "date": "3주 전", "views": "61,912회"}
         ]
     },
@@ -405,12 +414,11 @@ YOUTUBE_CHANNELS = [
         "name": "조선연예실록", "group": "CRITIC",
         "handle": "https://www.youtube.com/@tvsillok",
         "id": "", "sample_vid": "k5djjpipVbE",
-        "allow_shorts_fallback": False,
         "owner_keywords": ["조선연예실록", "tvsillok"],
         "search_query": "조선연예실록 백종원",
         "fallback": [
-            {"vid": "k5djjpipVbE", "title": "믿었던 빽다방마저 배신하려나?", "date": "1시간 전", "views": "1,063회"},
-            {"vid": "HBakbY09OtM", "title": "백종원 날개가 없다", "date": "1일 전", "views": "37,852회"},
+            {"vid": "k5djjpipVbE", "title": "믿었던 빽다방마저 배신하려나?", "date": "19시간 전", "views": "56,850회"},
+            {"vid": "HBakbY09OtM", "title": "백종원 날개가 없다", "date": "1일 전", "views": "52,538회"},
             {"vid": "aFV6CdkKGeY", "title": "백종원 씨는 국민을 무시하지 마세요", "date": "8일 전", "views": "48,563회"}
         ]
     },
@@ -418,46 +426,42 @@ YOUTUBE_CHANNELS = [
         "name": "백종원 본채널", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@paik_jongwon",
         "id": "UCyn-K7rZLXjGl7VXGweIlcA", "sample_vid": "6NnIoQ1mOKY",
-        "allow_shorts_fallback": False,
         "owner_keywords": ["백종원", "PAIK JONG WON"],
         "search_query": "백종원 PAIK JONG WON",
         "fallback": [
             {"vid": "6NnIoQ1mOKY", "title": "겨울 바다의 맛을 제대로 담은 통영굴짬뽕 먹으러 왔습니다", "date": "4일 전", "views": "887,924회"},
-            {"vid": "fGPEmOd53BY", "title": "피자 배달 알바합니다! 그런데 사람들이 못 알아봅니다ㅋㅋ", "date": "11일 전", "views": "1,361,320회"},
-            {"vid": "KNG-_c_p87k", "title": "[출장 중 배고파_청두] 1시간 40분 웨이팅?! 청두식 마라훠궈의 진짜 매운맛을 보여드립니다", "date": "12일 전", "views": "101,208회"}
+            {"vid": "fGPEmOd53BY", "title": "피자 배달 알바합니다! 그런데 사람들이 못 알아봅니다ㅋㅋ", "date": "11일 전", "views": "1,364,309회"},
+            {"vid": "KNG-_c_p87k", "title": "[출장 중 배고파_청두] 1시간 40분 웨이팅?! 청두식 마라훠궈의 진짜 매운맛을 보여드립니다", "date": "12일 전", "views": "348,657회"}
         ]
     },
     {
         "name": "TBK (글로벌소스)", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@TBK_theborn",
-        "id": "", "sample_vid": "FfC_pNkyaT8",
-        "allow_shorts_fallback": False,
+        "id": "", "sample_vid": "joHpz7hNmEM",
         "owner_keywords": ["TBK"],
-        "search_query": "TBK Mild Paik Ramyun",
+        "search_query": "TBK 백종원 레시피 소스",
         "fallback": [
-            {"vid": "FfC_pNkyaT8", "title": "Kimchi Egg Ramyun With Mild Paik Ramyun", "date": "1개월 전", "views": "1,711회"},
-            {"vid": "-wHsjUnhoL4", "title": "Dumpling Ramyun with Mild Paik Ramyun", "date": "1개월 전", "views": "356회"},
-            {"vid": "fCRzCl-gqOg", "title": "Mala Ramyun With Mild Paik Ramyun", "date": "1개월 전", "views": "1,247회"}
+            {"vid": "joHpz7hNmEM", "title": "미국에서도 그 맛 그대로, K-부대찌개 초간단 레시피", "date": "4개월 전", "views": "14,363회"},
+            {"vid": "PjNYsU3qv3Y", "title": "식당에서 먹는 제육볶음 맛, 이 소스면 끝!", "date": "5개월 전", "views": "46,762회"},
+            {"vid": "J7CXxaNPSQg", "title": "소스에 QR 찍었더니... 레시피가 쏟아짐!", "date": "5개월 전", "views": "11,289회"}
         ]
     },
     {
         "name": "더본 테이스티", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_tasty",
         "id": "", "sample_vid": "gazC1wTYt3k",
-        "allow_shorts_fallback": False,
         "owner_keywords": ["더본 테이스티", "더본테이스티", "theborn_tasty"],
         "search_query": "\"더본 테이스티\"",
         "fallback": [
             {"vid": "gazC1wTYt3k", "title": "침샘 폭발 주의! 대구의 맛, 막창짬뽕 화보 영상 🎬", "date": "3주 전", "views": "111,744회"},
             {"vid": "GdNx1GQAG_A", "title": "찾았다! 연돈튀김덮밥 할인 소식🫶", "date": "1개월 전", "views": "27,791회"},
-            {"vid": "7Om-LNDRQgw", "title": "연돈튀김덮밥 도시락 속 들리는 소리는?!", "date": "1개월 전", "views": "306회"}
+            {"vid": "5Wtv9jpPVWI", "title": "롤링파스타에 미슐랭 파브리 셰프가 등장한 이유는? 🧑‍🍳🍝", "date": "3개월 전", "views": "969,145회"}
         ]
     },
     {
         "name": "더본 NOW", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_now",
         "id": "", "sample_vid": "nY3ibLP2xbo",
-        "allow_shorts_fallback": False,
         "owner_keywords": ["더본NOW", "더본 NOW", "theborn_now"],
         "search_query": "\"더본NOW\"",
         "fallback": [
@@ -485,7 +489,7 @@ def parse_ko_age_to_minutes(date_str):
     if not date_str:
         return 999999
     s = str(date_str).strip()
-    if s in ('방금', '최신', '쇼츠'):
+    if s in ('방금', '오늘', '최신', '쇼츠'):
         return 1
     m = re.search(r'(\d+)\s*(초|분|시간|일|주|개월|달|년)', s)
     if m:
@@ -504,21 +508,17 @@ def parse_ko_age_to_minutes(date_str):
             pass
     return 999999
 
-def deduplicate_and_filter_latest(videos, max_count=3, reject_older_than_months=5):
-    """
-    1) 영상 ID 및 정규화 제목 기준으로 중복 영상을 완전히 제거합니다.
-    2) reject_older_than_months(기본 5개월)보다 오래된 구형 인기 영상은 절대 포함하지 않고 제거합니다.
-    """
+def deduplicate_and_sort_videos(videos, max_count=3, reject_older_than_months=8):
     if not videos:
         return []
     max_age_min = reject_older_than_months * 43200
-    unique_recent = []
+    unique_vids = []
     seen_vids = set()
     seen_titles = set()
 
     for v in videos:
         vid = v.get('vid') or v.get('link', '').split('v=')[-1]
-        norm_t = re.sub(r'\W+', '', v.get('title', '')).lower()[:24]
+        norm_t = re.sub(r'\W+', '', v.get('title', '')).lower()[:22]
         if not vid or not norm_t or vid in seen_vids or norm_t in seen_titles:
             continue
         age_min = parse_ko_age_to_minutes(v.get('date', ''))
@@ -526,15 +526,27 @@ def deduplicate_and_filter_latest(videos, max_count=3, reject_older_than_months=
         if age_min <= max_age_min:
             seen_vids.add(vid)
             seen_titles.add(norm_t)
-            unique_recent.append(v)
+            unique_vids.append(v)
 
-    unique_recent.sort(key=lambda x: x['_age_min'])
-    return unique_recent[:max_count]
+    unique_vids.sort(key=lambda x: x['_age_min'])
+    return unique_vids[:max_count]
 
 def resolve_exact_channel_id(ch):
     if ch.get('id') and ch['id'].startswith('UC'):
         return ch['id']
-    # 1차: sample_vid로 player API에서 정확한 실제 channelId 추출 (가장 확실함)
+    # 1순위: navigation/resolve_url (채널 @핸들 URL을 가장 빠르고 정확하게 UC... ID로 변환)
+    try:
+        r_url = "https://www.youtube.com/youtubei/v1/navigation/resolve_url?prettyPrint=false"
+        payload = {"context": INNERTUBE_CONTEXT, "url": ch['handle']}
+        res = requests.post(r_url, json=payload, headers=COMMON_HEADERS, timeout=3)
+        if res.status_code == 200:
+            cid = res.json().get('endpoint', {}).get('browseEndpoint', {}).get('browseId', '')
+            if cid.startswith('UC'):
+                ch['id'] = cid
+                return cid
+    except Exception:
+        pass
+    # 2순위: sample_vid로 player API 조회
     if ch.get('sample_vid'):
         try:
             p_url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
@@ -547,18 +559,6 @@ def resolve_exact_channel_id(ch):
                     return cid
         except Exception:
             pass
-    # 2차: navigation/resolve_url 호출
-    try:
-        r_url = "https://www.youtube.com/youtubei/v1/navigation/resolve_url?prettyPrint=false"
-        payload = {"context": INNERTUBE_CONTEXT, "url": ch['handle']}
-        res = requests.post(r_url, json=payload, headers=COMMON_HEADERS, timeout=3)
-        if res.status_code == 200:
-            cid = res.json().get('endpoint', {}).get('browseEndpoint', {}).get('browseId', '')
-            if cid.startswith('UC'):
-                ch['id'] = cid
-                return cid
-    except Exception:
-        pass
     return ""
 
 def extract_full_videos_only(data_node, max_scan=20, owner_keywords=None, target_cid=None):
@@ -569,7 +569,7 @@ def extract_full_videos_only(data_node, max_scan=20, owner_keywords=None, target
         if len(videos) >= max_scan:
             return
         if isinstance(obj, dict):
-            if 'channelFeaturedContentRenderer' in obj or 'channelVideoPlayerRenderer' in obj or 'shelfRenderer' in obj:
+            if 'channelFeaturedContentRenderer' in obj or 'channelVideoPlayerRenderer' in obj:
                 return
             if 'videoRenderer' in obj:
                 vr = obj['videoRenderer']
@@ -593,10 +593,14 @@ def extract_full_videos_only(data_node, max_scan=20, owner_keywords=None, target
                             return
 
                     t_runs = vr.get('title', {}).get('runs', [])
-                    title = t_runs[0].get('text', '') if t_runs else vr.get('title', {}).get('simpleText', '')
-                    pub = vr.get('publishedTimeText', {}).get('simpleText', '')
+                    title = "".join(r.get('text', '') for r in t_runs) if t_runs else vr.get('title', {}).get('simpleText', '')
+                    # 최초공개(Premiere) 영상의 runs 배열 날짜 포맷('스트리밍 시간: N시간 전')까지 완벽 지원
+                    pub = (
+                        vr.get('publishedTimeText', {}).get('simpleText', '') or
+                        "".join(r.get('text', '') for r in vr.get('publishedTimeText', {}).get('runs', []))
+                    ).replace('스트리밍 시간:', '').replace('최초 공개:', '').strip()
                     v_raw = vr.get('viewCountText', {}).get('simpleText', '') or "".join(r.get('text', '') for r in vr.get('viewCountText', {}).get('runs', []))
-                    if '시청 중' in v_raw or not pub:
+                    if '시청 중' in v_raw or '예정' in pub or not pub:
                         return
                     if title:
                         seen_vids.add(vid)
@@ -624,39 +628,47 @@ def fetch_single_channel(ch):
     is_live = False
     b_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
 
-    # 1순위: 채널 기본 탭 목록을 조회해 실제 '동영상(Videos)' 탭의 고유 params를 추출하여 호출
+    # 1순위: V11에서 검증된 순수 동영상 탭 직행 호출 (params: "EgZ2aWRlb3M=")
     if cid.startswith('UC'):
         try:
-            res_init = requests.post(b_url, json={"context": INNERTUBE_CONTEXT, "browseId": cid}, headers=COMMON_HEADERS, timeout=3.5)
-            if res_init.status_code == 200:
-                tabs = res_init.json().get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
+            payload = {"context": INNERTUBE_CONTEXT, "browseId": cid, "params": "EgZ2aWRlb3M="}
+            res = requests.post(b_url, json=payload, headers=COMMON_HEADERS, timeout=3.5)
+            if res.status_code == 200:
+                r_json = res.json()
+                tabs = r_json.get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
+                videos_tab_content = None
                 videos_tab_params = None
                 for t in tabs:
                     tr = t.get('tabRenderer', {})
                     t_title = tr.get('title', '')
                     t_url = tr.get('endpoint', {}).get('commandMetadata', {}).get('webCommandMetadata', {}).get('url', '')
                     if t_title in ('동영상', 'Videos') or t_url.endswith('/videos'):
-                        videos_tab_params = tr.get('endpoint', {}).get('browseEndpoint', {}).get('params')
+                        if tr.get('content'):
+                            videos_tab_content = tr.get('content')
+                        else:
+                            videos_tab_params = tr.get('endpoint', {}).get('browseEndpoint', {}).get('params')
                         break
 
-                if videos_tab_params:
-                    res_v = requests.post(b_url, json={"context": INNERTUBE_CONTEXT, "browseId": cid, "params": videos_tab_params}, headers=COMMON_HEADERS, timeout=3.5)
-                    if res_v.status_code == 200:
-                        tabs_v = res_v.json().get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
-                        for tv in tabs_v:
-                            trv = tv.get('tabRenderer', {})
-                            if trv.get('selected') and trv.get('content'):
-                                found_v = extract_full_videos_only(trv.get('content'), 15)
-                                candidate_vids.extend(found_v)
-                                if found_v:
-                                    is_live = True
+                if videos_tab_content:
+                    candidate_vids.extend(extract_full_videos_only(videos_tab_content, 18))
+                elif videos_tab_params:
+                    res2 = requests.post(b_url, json={"context": INNERTUBE_CONTEXT, "browseId": cid, "params": videos_tab_params}, headers=COMMON_HEADERS, timeout=3.5)
+                    if res2.status_code == 200:
+                        tabs2 = res2.json().get('contents', {}).get('twoColumnBrowseResultsRenderer', {}).get('tabs', [])
+                        for t2 in tabs2:
+                            tr2 = t2.get('tabRenderer', {})
+                            if tr2.get('content'):
+                                candidate_vids.extend(extract_full_videos_only(tr2.get('content'), 18))
+                if candidate_vids:
+                    is_live = True
         except Exception:
             pass
 
-    # 5개월 이내 최신 영상만 필터링 & 중복 제목 제거
-    vids = deduplicate_and_filter_latest(candidate_vids, max_count=3, reject_older_than_months=5)
+    # 공식 채널(TBK 등)은 롱폼 업로드 주기가 4~5개월이므로 9개월까지 허용, 비판 채널은 5개월 이내만 엄격 유지
+    max_months = 9 if ch.get('group') == 'OFFICIAL' else 5
+    vids = deduplicate_and_sort_videos(candidate_vids, max_count=3, reject_older_than_months=max_months)
 
-    # 2순위: 동영상 탭에서 최신 영상이 3개 미만일 경우 최신순 검색(CAI=)으로 보충하되 구형 영상(5개월 초과)은 절대 배제
+    # 2순위: 동영상 탭에서 3개가 안 찼을 때만 최신순 검색(CAI=) 보충
     if len(vids) < 3 and ch.get('search_query'):
         try:
             s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
@@ -666,11 +678,11 @@ def fetch_single_channel(ch):
                 if found_s:
                     is_live = True
                 candidate_vids.extend(found_s)
-                vids = deduplicate_and_filter_latest(candidate_vids, max_count=3, reject_older_than_months=5)
+                vids = deduplicate_and_sort_videos(candidate_vids, max_count=3, reject_older_than_months=max_months)
         except Exception:
             pass
 
-    # 3순위: 그래도 3개가 안 차면 검증된 최신 백업 스냅샷으로 합쳐서 최신순 정렬 (구형 10개월/1년 전 영상 유입 원천 차단)
+    # 3순위: 최신 백업 스냅샷 병합 후 최신순 정렬
     if len(vids) < 3:
         for item in ch.get('fallback', []):
             candidate_vids.append({
@@ -679,7 +691,7 @@ def fetch_single_channel(ch):
                 'thumb': f"https://i.ytimg.com/vi/{item['vid']}/mqdefault.jpg",
                 'date': item['date'], 'views': item['views']
             })
-        vids = deduplicate_and_filter_latest(candidate_vids, max_count=3, reject_older_than_months=6)
+        vids = deduplicate_and_sort_videos(candidate_vids, max_count=3, reject_older_than_months=max_months)
 
     return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids[:3], 'is_live': is_live}
 
@@ -701,14 +713,17 @@ def fetch_youtube_hot_search():
                         vid = vr.get('videoId', '')
                         if vid and vid not in seen_vids:
                             t_runs = vr.get('title', {}).get('runs', [])
-                            title = t_runs[0].get('text', '') if t_runs else vr.get('title', {}).get('simpleText', '')
+                            title = "".join(r.get('text', '') for r in t_runs) if t_runs else vr.get('title', {}).get('simpleText', '')
                             if not any(k in title for k in ['백종원', '더본', '빽다방', '홍콩반점', '연돈', '오재나', '빽보이', '신공', '조선연예실록']):
                                 return
                             owner_runs = vr.get('ownerText', {}).get('runs', []) or vr.get('longBylineText', {}).get('runs', [])
                             channel_name = owner_runs[0].get('text', '유튜브') if owner_runs else '유튜브'
-                            pub = vr.get('publishedTimeText', {}).get('simpleText', '')
+                            pub = (
+                                vr.get('publishedTimeText', {}).get('simpleText', '') or
+                                "".join(r.get('text', '') for r in vr.get('publishedTimeText', {}).get('runs', []))
+                            ).replace('스트리밍 시간:', '').replace('최초 공개:', '').strip()
                             v_raw = vr.get('viewCountText', {}).get('simpleText', '') or "".join(r.get('text', '') for r in vr.get('viewCountText', {}).get('runs', []))
-                            if '시청 중' in v_raw or not pub:
+                            if '시청 중' in v_raw or '예정' in pub or not pub:
                                 return
                             seen_vids.add(vid)
                             videos.append({
@@ -727,7 +742,7 @@ def fetch_youtube_hot_search():
             walk(data)
     except Exception:
         pass
-    return deduplicate_and_filter_latest(videos, max_count=8, reject_older_than_months=3)
+    return deduplicate_and_sort_videos(videos, max_count=8, reject_older_than_months=3)
 
 # --- 5. HTML 대시보드 생성 ---
 def generate_html_string():
@@ -748,7 +763,7 @@ def generate_html_string():
     current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H:%M:%S")
 
     all_titles_for_radar = (
-        [p['title'] for p in dc_posts if '실패' not in p['title']] +
+        [p['title'] for p in dc_posts if p.get('no') != 'ERR'] +
         [n['title'].rsplit(' - ', 1)[0] for n in news if '실패' not in n['title']]
     )
 
@@ -756,7 +771,7 @@ def generate_html_string():
     for idx, p in enumerate(dc_posts):
         safe_title = p['title'].replace('"', '&quot;')
         dc_html += f"""
-        <li class="dc-item" data-no="{p.get('no', idx)}" data-rank="{idx}" data-title="{safe_title}" data-up="{p['upvotes']}" data-views="{p['views']}" data-date="{p['date']}" data-link="{p['link']}">
+        <li class="dc-item" data-no="{p.get('no', 'ERR')}" data-rank="{idx}" data-title="{safe_title}" data-up="{p['upvotes']}" data-views="{p['views']}" data-date="{p['date']}" data-link="{p['link']}">
             <div class="meta-line">
                 <span class="dc-new-badge" style="display:none;">🆕 NEW</span>
                 <span>{p['date']} | 조회 {p['views']} | <span style="color:#ff5252; font-weight:bold;">추천 {p['upvotes']}</span></span>
@@ -855,7 +870,6 @@ def generate_html_string():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- 유튜브 임베드 오류 153 방지를 위해 strict-origin-when-cross-origin 적용 (네이버 차트는 개별 img에 no-referrer 적용) -->
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>더본코리아 빽모니터링 PRO</title>
     <style>
@@ -1056,7 +1070,6 @@ def generate_html_string():
                 <button class="tab-btn" onclick="switchChart('{stock['chart_c_week']}', this)">주봉</button>
                 <button class="tab-btn" onclick="switchChart('{stock['chart_c_month']}', this)">월봉</button>
             </div>
-            <!-- 네이버 금융 차트 이미지에만 개별적으로 no-referrer 적용 -->
             <img id="stockChartImg" src="{stock['chart_day']}" referrerpolicy="no-referrer" class="chart-img" alt="주가 차트">
 
             <h2 style="margin-top:22px; font-size:1.05em;">📑 최근 전자공시 (DART 연동)</h2>
@@ -1065,7 +1078,7 @@ def generate_html_string():
             </ul>
         </div>
 
-        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 (수동 분류 자가학습 + 자동복구 지원) -->
+        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 -->
         <div class="card">
             <h2>
                 <span>📰 실시간 뉴스 판독기 (자가학습·물타기 분리)</span>
@@ -1086,7 +1099,7 @@ def generate_html_string():
 
             <div id="kwManagerPanel" class="kw-manager-panel" style="margin-top:0;">
                 <div class="kw-sec-title" style="color:#00e676;">
-                    <span>🧠 수동 분류 자가학습 메모리 (수동 지정한 기사에서 학습된 단어 가중치 · 클릭 시 삭제)</span>
+                    <span>🧠 수동 분류 자가학습 메모리 (클릭 시 삭제)</span>
                     <button class="kw-add-btn" style="font-size:0.72em; padding:2px 7px;" onclick="clearLearnedMemory()">학습 초기화</button>
                 </div>
                 <div id="tagsLearned" class="kw-tag-wrap" style="margin-bottom:8px;"></div>
@@ -1225,7 +1238,7 @@ def generate_html_string():
 
             <div id="dcDeletedPanel" class="kw-manager-panel" style="margin-top:0; border-color:#ff5252;">
                 <div class="kw-sec-title" style="color:#ff5252;">
-                    <span>🚨 개념글 중간에서 갑자기 사라진 게시글 (신고삭·자삭 의심 자동 박제 목록)</span>
+                    <span>🚨 개념글 중간에서 갑자기 사라진 게시글 (현재 50선에 살아있는 글은 자동 제외됨)</span>
                     <button class="kw-add-btn" style="font-size:0.72em; padding:2px 7px;" onclick="clearDeletedHistory()">기록 비우기</button>
                 </div>
                 <ul id="dcDeletedList" class="scroll-list" style="max-height:180px; font-size:0.88em;"></ul>
@@ -1242,13 +1255,16 @@ def generate_html_string():
         const DEFAULT_RADAR_KW = {default_radar_kw_json};
         const RAW_TITLES = {raw_titles_json};
 
-        const NEWS_STORAGE_KEY = 'theborn_news_kw_v12';
-        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v12';
-        const MANUAL_NEWS_CAT_KEY = 'theborn_manual_news_cat_v12';
-        const LEARNED_TOKENS_KEY = 'theborn_learned_tokens_v12';
-        const DC_SNAPSHOT_KEY = 'theborn_dc_snapshot_v12';
-        const DC_DELETED_LOG_KEY = 'theborn_dc_deleted_log_v12';
-        const LAST_STOCK_PRICE_KEY = 'theborn_last_stock_v12';
+        const NEWS_STORAGE_KEY = 'theborn_news_kw_v13';
+        const RADAR_STORAGE_KEY = 'theborn_radar_kw_v13';
+        const MANUAL_NEWS_CAT_KEY = 'theborn_manual_news_cat_v13';
+        const LEARNED_TOKENS_KEY = 'theborn_learned_tokens_v13';
+        const DC_SNAPSHOT_KEY = 'theborn_dc_snapshot_v13';
+        const DC_DELETED_LOG_KEY = 'theborn_dc_deleted_log_v13';
+        const LAST_STOCK_PRICE_KEY = 'theborn_last_stock_v13';
+
+        // 이전 버전(v11, v12)에서 잘못 오염된 천안문 스냅샷 캐시 자동 정리
+        ['theborn_dc_snapshot_v11', 'theborn_dc_deleted_log_v11', 'theborn_dc_snapshot_v12', 'theborn_dc_deleted_log_v12'].forEach(k => localStorage.removeItem(k));
 
         let currentFilter = 'ALL';
         let activeKeywordFilter = '';
@@ -1256,7 +1272,7 @@ def generate_html_string():
         let userNewsKw = loadStored(NEWS_STORAGE_KEY, DEFAULT_NEWS_KW);
         let userRadarKw = loadStored(RADAR_STORAGE_KEY, DEFAULT_RADAR_KW);
         let manualNewsCats = loadStored(MANUAL_NEWS_CAT_KEY, {{}});
-        let learnedTokens = loadStored(LEARNED_TOKENS_KEY, {{}}); // {{ token: {{ cat: 'RISK'|'PR'|'GEN', hits: 1 }} }}
+        let learnedTokens = loadStored(LEARNED_TOKENS_KEY, {{}});
 
         function loadStored(key, fallbackObj) {{
             try {{
@@ -1286,7 +1302,6 @@ def generate_html_string():
             document.getElementById('inlinePlayerTitle').textContent = '▶ ' + title;
             popBtn.onclick = () => openSidePopup(watchUrl, 'yt_popup_player');
 
-            // 로컬 파일(file://)로 열었을 때는 유튜브가 iframe 임베드를 차단하므로 즉시 우측 미니 팝업창으로 재생
             if (window.location.protocol === 'file:') {{
                 openSidePopup(watchUrl, 'yt_popup_player');
                 return;
@@ -1330,26 +1345,41 @@ def generate_html_string():
             if (curPrice > 0) localStorage.setItem(LAST_STOCK_PRICE_KEY, String(curPrice));
         }}
 
+        // --- 🦅 V13 정밀 천안문(중간 삭제) 감지 & 생존글 오판 자동 소거 엔진 ---
         function trackDcPostsAndDeletions() {{
             const prevMap = loadStored(DC_SNAPSHOT_KEY, {{}});
-            const deletedLog = loadStored(DC_DELETED_LOG_KEY, []);
+            let deletedLog = loadStored(DC_DELETED_LOG_KEY, []);
             const currentItems = Array.from(document.querySelectorAll('#dcPostList .dc-item'));
+
+            // [안전장치 1] 디시 서버 일시 차단/오류로 정상 게시글이 15개 미만이면 스냅샷 비교를 중단해 오작동 원천 방지
+            const validItems = currentItems.filter(li => {{
+                const no = li.getAttribute('data-no') || '';
+                return /^\\d+$/.test(no) && no !== '0';
+            }});
+            if (validItems.length < 15) {{
+                renderDeletedDcLog(deletedLog);
+                return;
+            }}
+
             const currentMap = {{}};
             const currentNos = new Set();
+            const currentTitles = new Set();
             let newCount = 0;
+            const prevKeys = Object.keys(prevMap);
 
-            currentItems.forEach((li, idx) => {{
+            validItems.forEach((li, idx) => {{
                 const no = li.getAttribute('data-no');
-                const title = li.getAttribute('data-title');
+                const title = li.getAttribute('data-title') || '';
                 const up = parseInt((li.getAttribute('data-up') || '0').replace(/,/g, ''), 10);
                 const views = li.getAttribute('data-views');
                 const date = li.getAttribute('data-date');
                 const link = li.getAttribute('data-link');
 
                 currentNos.add(no);
-                currentMap[no] = {{ no, title, up, views, date, link, rank: idx }};
+                currentTitles.add(title);
+                currentMap[no] = {{ no, numNo: parseInt(no, 10), title, up, views, date, link, rank: idx }};
 
-                if (Object.keys(prevMap).length > 0) {{
+                if (prevKeys.length >= 15) {{
                     if (!prevMap[no]) {{
                         li.querySelector('.dc-new-badge').style.display = 'inline-block';
                         newCount++;
@@ -1362,24 +1392,43 @@ def generate_html_string():
                 }}
             }});
 
-            if (Object.keys(prevMap).length > 0) {{
+            // [안전장치 2] 현재 50선에 멀쩡히 살아있는 글이나 오류 메시지는 삭제 로그(deletedLog)에서 즉시 자동 제거
+            deletedLog = deletedLog.filter(d =>
+                d && /^\\d+$/.test(String(d.no)) && d.no !== '0' &&
+                !currentNos.has(String(d.no)) && !currentTitles.has(d.title) &&
+                !d.title.includes('비어있습니다') && !d.title.includes('실패')
+            );
+
+            // [안전장치 3] 자연스러운 페이지 밀림(이전순위 + 신규진입글수 >= 44)이나 장기 미접속(newCount > 15)을 제외한 진짜 중간 삭제만 추출
+            if (prevKeys.length >= 15 && newCount <= 15) {{
+                const newlyDeletedCandidates = [];
                 Object.values(prevMap).forEach(oldPost => {{
-                    if (oldPost.rank <= 35 && !currentNos.has(oldPost.no)) {{
-                        const alreadyLogged = deletedLog.some(d => d.no === oldPost.no);
-                        if (!alreadyLogged && oldPost.title && !oldPost.title.includes('실패')) {{
+                    if (!currentNos.has(String(oldPost.no)) && !currentTitles.has(oldPost.title)) {{
+                        const expectedNewRank = (oldPost.rank || 0) + newCount;
+                        // 예상 순위가 42위 이내(1페이지 중상위권)인데 갑자기 사라진 경우만 천안문으로 판정
+                        if (expectedNewRank < 42) {{
+                            newlyDeletedCandidates.push(oldPost);
+                        }}
+                    }}
+                }});
+
+                // 한 번에 8개 이하가 사라졌을 때만 기록 (대량 페이지 물갈이 오판 방지)
+                if (newlyDeletedCandidates.length > 0 && newlyDeletedCandidates.length <= 8) {{
+                    newlyDeletedCandidates.forEach(oldPost => {{
+                        if (!deletedLog.some(d => String(d.no) === String(oldPost.no))) {{
                             deletedLog.unshift({{
                                 ...oldPost,
                                 detectedAt: new Date().toLocaleTimeString('ko-KR', {{ hour: '2-digit', minute: '2-digit' }})
                             }});
                         }}
-                    }}
-                }});
+                    }});
+                }}
             }}
 
             localStorage.setItem(DC_SNAPSHOT_KEY, JSON.stringify(currentMap));
-            localStorage.setItem(DC_DELETED_LOG_KEY, JSON.stringify(deletedLog.slice(0, 30)));
+            localStorage.setItem(DC_DELETED_LOG_KEY, JSON.stringify(deletedLog.slice(0, 25)));
 
-            if (newCount > 0) {{
+            if (newCount > 0 && newCount < 45) {{
                 document.getElementById('dcNewCountBadge').textContent = `🆕 신규 개념글 ${{newCount}}건`;
             }}
             renderDeletedDcLog(deletedLog);
@@ -1390,14 +1439,14 @@ def generate_html_string():
             const listEl = document.getElementById('dcDeletedList');
             btn.textContent = `🚨 천안문·삭제 감지 (${{deletedLog.length}})`;
             if (!deletedLog.length) {{
-                listEl.innerHTML = "<li style='color:#8b949e;'>아직 중간 삭제(천안문)가 감지된 개념글이 없습니다. (새로고침 시 자동 비교)</li>";
+                listEl.innerHTML = "<li style='color:#8b949e;'>현재 개념글 중간에서 삭제된 게시글이 없습니다. (하단 페이지 밀림 및 생존글 자동 제외됨)</li>";
                 return;
             }}
             listEl.innerHTML = deletedLog.map(d => `
                 <li>
                     <div class="meta-line">
                         <span class="n-badge badge-risk">삭제감지 ${{d.detectedAt}}</span>
-                        <span>작성 ${{d.date}} | 마지막 조회 ${{d.views}} | 추천 ${{d.up}}</span>
+                        <span>글번호 #${{d.no}} | 작성 ${{d.date}} | 마지막 조회 ${{d.views}} | 추천 ${{d.up}}</span>
                     </div>
                     <a href="${{d.link}}" target="_blank">🗑️ ${{d.title}}</a>
                 </li>
@@ -1572,7 +1621,6 @@ def generate_html_string():
             recomputeRadarKeywords();
         }}
 
-        // --- 🧠 수동 분류 자가학습(Self-Learning) 토큰 추출 및 관리 ---
         const LEARN_STOP_WORDS = new Set([
             '백종원', '백종원의', '백종원이', '더본코리아', '더본', '대표', '빽다방', '홍콩반점',
             '3분기', '2분기', '1분기', '4분기', '올해', '내년', '하루', '오늘', '최근', '단독', '종합'
@@ -1682,7 +1730,6 @@ def generate_html_string():
             reclassifyAllNews();
         }}
 
-        // 배지 클릭 시: [수동:리스크 ➔ 수동:언플 ➔ 수동:일반 ➔ 자동판독 복구] 4단계 순환 + 자가학습
         function cycleNewsManualCat(badgeEl) {{
             const li = badgeEl.closest('.news-item');
             const key = li.getAttribute('data-key');
@@ -1691,7 +1738,6 @@ def generate_html_string():
 
             let nextCat = null;
             if (!curManual) {{
-                // 첫 클릭 시 현재 자동 판독의 반대 카테고리로 즉시 전환
                 const curAuto = li.getAttribute('data-cat');
                 nextCat = (curAuto === 'RISK') ? 'PR' : 'RISK';
             }} else if (curManual === 'RISK') {{
@@ -1699,7 +1745,6 @@ def generate_html_string():
             }} else if (curManual === 'PR') {{
                 nextCat = 'GEN';
             }} else {{
-                // 4번째 클릭 시 수동 해제 및 자동판독 복구
                 nextCat = null;
             }}
 
@@ -1714,7 +1759,6 @@ def generate_html_string():
             reclassifyAllNews();
         }}
 
-        // [↺ 자동복구] 버튼 클릭 시 즉시 원래 자동판독으로 복원
         function restoreAutoNewsCat(btnEl) {{
             const li = btnEl.closest('.news-item');
             const key = li.getAttribute('data-key');
@@ -1749,32 +1793,27 @@ def generate_html_string():
             [/\[똑똑한|\[유통가|\[푸드|브리핑|단신|꽂힌\s*소스시장|성장동력\s*확보/, '보도자료·업계 홍보']
         ];
 
-        function classifySingleTitleV12(rawTitle, totalCnt, newsKey) {{
-            // 0순위: 사용자가 직접 클릭한 수동 지정값
+        function classifySingleTitleV13(rawTitle, totalCnt, newsKey) {{
             if (manualNewsCats[newsKey]) {{
                 const mCat = manualNewsCats[newsKey];
                 const mLabels = {{ 'RISK': '🚨 수동지정: 리스크', 'PR': '🎺 수동지정: 언플', 'GEN': '📰 수동지정: 일반' }};
                 return [mCat, mLabels[mCat], true];
             }}
-            // 1순위: 실질적 리스크·비판 구문
             for (const [reg, reason] of JS_HARD_RISK) {{
                 if (reg.test(rawTitle)) {{
                     return ['RISK', totalCnt >= 2 ? `🚨 쟁점확산 (${{totalCnt}}건 · ${{reason}})` : `🚨 리스크 (${{reason}})`, false];
                 }}
             }}
-            // 2순위: 적자 축소·리스크 완화 물타기 언플
             for (const [reg, reason] of JS_SPIN_PR) {{
                 if (reg.test(rawTitle)) {{
                     return ['PR', totalCnt >= 2 ? `🎺 복붙언플 (${{totalCnt}}건 · ${{reason}})` : `🎺 물타기언플 (${{reason}})`, false];
                 }}
             }}
-            // 3순위: 일반 홍보 패턴
             for (const [reg, reason] of JS_STANDARD_PR) {{
                 if (reg.test(rawTitle)) {{
                     return ['PR', totalCnt >= 2 ? `🎺 복붙언플 (${{totalCnt}}건 · ${{reason}})` : `🎺 자본언플 (${{reason}})`, false];
                 }}
             }}
-            // 4순위: 🧠 수동 분류로 학습된 자가학습 토큰 매칭
             for (const [tk, info] of Object.entries(learnedTokens)) {{
                 if (rawTitle.includes(tk)) {{
                     if (info.cat === 'RISK') return ['RISK', `🚨 학습판독: 리스크 (${{tk}})`, false];
@@ -1782,7 +1821,6 @@ def generate_html_string():
                     if (info.cat === 'GEN') return ['GEN', `📰 학습판독: 일반 (${{tk}})`, false];
                 }}
             }}
-            // 5순위: 사용자 키워드 사전
             const matchedRisk = userNewsKw.RISK.find(rk => rawTitle.includes(rk));
             if (matchedRisk) {{
                 return ['RISK', totalCnt >= 2 ? `🚨 쟁점확산 (${{totalCnt}}건 · ${{matchedRisk}})` : `🚨 리스크 (${{matchedRisk}})`, false];
@@ -1813,7 +1851,7 @@ def generate_html_string():
                     return;
                 }}
 
-                const [cat, label, isManual] = classifySingleTitleV12(rawTitle, totalCnt, newsKey);
+                const [cat, label, isManual] = classifySingleTitleV13(rawTitle, totalCnt, newsKey);
 
                 li.setAttribute('data-cat', cat);
                 const badgeEl = li.querySelector('.n-badge');
@@ -1827,7 +1865,6 @@ def generate_html_string():
                 }}
 
                 const kwMatch = (!qLow || rawTitle.toLowerCase().includes(qLow));
-                // 검색어 필터에 매칭된 기사만 탭 숫자 및 상단 비율 게이지에 즉각 반영
                 if (kwMatch) {{
                     counts.ALL++;
                     counts[cat]++;
@@ -1920,4 +1957,4 @@ if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V12 업데이트 완료!")
+    print("✅ theborn_dashboard.html V13 업데이트 완료!")
