@@ -20,7 +20,7 @@ NEWS_KEYWORDS = {
         "불만", "신고", "적발", "폭락", "정솔", "지혁", "허점", "횡령", "혐의", "무혐의",
         "보완수사", "수사", "과징금", "과태료", "허풍", "위생", "비판", "외면", "철수", "갑질",
         "허위", "과장", "급락", "우지커피", "눈물", "손절", "차단", "발각", "기만", "파묘",
-        "태극기", "오류", "지적", "급감", "실태", "문 닫", "틀렸다", "타격", "순감소",
+        "태극기", "오류", "지적", "급감", "실태", "문 닫", "틀렸다", "타격", "순감소", "순감", "꺾였다",
         "청구포기", "패소", "원산지", "짬처리", "퇴출", "일침", "불똥", "악재", "가중", "무색", "위축", "흔들"
     ],
     "PR": [
@@ -31,7 +31,7 @@ NEWS_KEYWORDS = {
         "제공", "500원", "파격딜", "당근페이", "이벤트", "특가", "상생", "협약", "MOU",
         "선보", "강화", "확대", "진출", "개최", "성료", "나눔", "승부수", "성공", "뚫는다",
         "유통망", "블루오션", "세일즈", "세일", "외식왕", "파브리", "반전", "풍미", "러시",
-        "완판", "일일 배달", "하루 배달", "일일 라이더", "라이더 변신", "한 판 더", "선물", "통영굴짬뽕"
+        "완판", "일일 배달", "하루 배달", "일일 라이더", "라이더 변신", "한 판 더", "선물", "통영굴짬뽕", "연착륙"
     ],
     "SPAM": [
         "카지노", "토토", "바카라", "첫충", "슬롯", "파워볼", "홀덤", "배팅"
@@ -54,7 +54,7 @@ RADAR_KEYWORDS = {
     ],
     "STOP": [
         "단독", "포토", "칼럼", "데스크칼럼", "인터뷰", "기획", "속보", "신고", "직원", "일반",
-        "없어", "없어도", "없어서", "있어", "있어도", "많은", "적은", "빠른", "개인적", "개인", "영업",
+        "없어", "없어도", "없어서", "있어", "있어도", "많은", "적은", "빠른", "개인적", "개인", "영업", "분기",
         "근데", "아니", "진짜", "이거", "저거", "뭔가", "이제", "와서", "혹시", "니들",
         "알고", "어쩌라고", "백종원", "백종원이", "백종원의", "백종원씨", "더본", "더본코리아",
         "대표", "대표님", "갤주", "종팔이", "근황", "지금", "오늘", "오늘자", "최근", "현재",
@@ -134,7 +134,7 @@ def get_dc_best_posts_with_page2():
     p2_meta = {'nos': [x['no'] for x in p2], 'titles': [x['title'] for x in p2]}
     return p1, p2_meta
 
-# --- 2. 4단계 한국어 기사 문맥 대조 & 물타기 언플 판독 엔진 ('이탈리아' 오판 완벽 수정) ---
+# --- 2. 4단계 한국어 기사 문맥 대조 & 물타기 언플 판독 엔진 ---
 STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
 
 def extract_tokens(title):
@@ -144,29 +144,29 @@ def extract_tokens(title):
 
 HARD_RISK_PATTERNS = [
     (r"(믿었는데|떠나가자|다\s*떠나|등\s*돌린|곡소리|비명|외면|눈물)", "가맹점주 이탈·원성"),
-    (r"(가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|급감|해지.*급증|가맹점\s*이탈|점주\s*이탈|매출\s*위축|가맹사업.*흔들)", "가맹해지·매출 위축"),
+    (r"(가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|50곳\s*순감|꺾였다|급감|해지.*급증|가맹점\s*이탈|점주\s*이탈|매출\s*위축|가맹사업.*흔들)", "가맹해지·매출 위축"),
     (r"(적자\s*수렁|반토막|적자\s*전환|무색|3분기도\s*적자|연속\s*적자.*폭락|주가.*폭락|신저가|국내는.*휘청|국내.*휘청|부진의\s*수렁)", "실적 악화·적자 수렁"),
     (r"(유출|침해|해킹|KISA|개인정보|계좌정보|보안\s*논란|수탁사)", "개인정보·보안 사고"),
-    (r"(무더기\s*고소|종토방.*고소|변호사\s*일침|처벌\s*우려|처벌대상|소송\s*위험|무혐의|청구포기|패소|피고소)", "고소 남발·법적 분쟁"),
+    (r"(무더기\s*고소|수백명\s*고소|쪼개기|합의금\s*장사|종토방.*고소|변호사\s*일침|처벌\s*우려|처벌대상|소송\s*위험|무혐의|청구포기|패소|피고소)", "고소 남발·법적 분쟁"),
     (r"(위생|원산지|꼼수|책임\s*회피|외주\s*탓|갑질|공정위|국감|불똥|경영\s*부담.*가중|끊이지\s*않는\s*악재|0원\s*쿠폰.*논란)", "경영 논란·오너리스크")
 ]
 
 SPIN_PR_PATTERNS = [
-    (r"(오너\s*리스크\s*해소|리스크.*완화|백종원\s*일냈다)", "오너리스크 해소 억빠"),
+    (r"(오너\s*리스크\s*해소|리스크.*완화|백종원\s*일냈다|반등\s*열쇠\s*될까)", "오너리스크 해소·반등 억빠"),
     (r"((적자|영업손실|영업적자|손실).*(줄었다|줄였다|줄여|감소|축소|개선|원가\s*잡았다))", "적자 축소 물타기"),
     (r"((줄었다|줄였다|줄여|감소|축소|개선).*(적자|영업손실|영업적자|손실))", "적자 축소 물타기")
 ]
 
 STANDARD_PR_PATTERNS = [
-    (r"(중국.*매장.*확대|상하이|하루\s*1000잔|불티|무섭게\s*팔린다|中\s*진출|영토\s*확장|아망추.*인기|출점\s*가속|대박\s*조짐|추가\s*출점)", "중국 빽다방 홍보"),
-    (r"(우녹스|이탈리아\s*오븐|맛\s*표준화|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재|오븐\s*시장|유럽.*투트랙|꺼낸\s*승부수)", "해외·오븐 제휴 홍보"),
+    (r"(중국.*매장.*확대|상하이|하루\s*1000잔|불티|무섭게\s*팔린다|中\s*진출|영토\s*확장|아망추.*인기|출점\s*가속|대박\s*조짐|추가\s*출점|더\s*낸다|연착륙)", "중국 빽다방 홍보"),
+    (r"(우녹스|이탈리아\s*오븐|맛\s*표준화|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재|오븐\s*시장|유럽.*투트랙|꺼낸\s*승부수|배달전문점\s*실험)", "해외·신사업 홍보"),
     (r"(피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\s*배달|하루\s*배달|일일\s*라이더|치즈킥|소방서)", "유튜브 배달쇼 홍보"),
     (r"(소유진|아트하우스|대저택|미술관|내조|애셋맘)", "오너 일가 화제성 언플"),
     (r"(통영\s*굴|통영굴짬뽕|팔도\s*짬뽕|신제품|신메뉴|출시|선보|프로모션|할인|특가|이벤트|나눔점|기부|체험행사)", "신메뉴·이벤트 홍보"),
     (r"(\[똑똑한|\[유통가|\[푸드|브리핑|단신|꽂힌\s*소스시장|성장동력\s*확보)", "보도자료·업계 홍보")
 ]
 
-def classify_news_v15(cluster_titles_text, dup_count):
+def classify_news_v16(cluster_titles_text, dup_count):
     total_cnt = 1 + dup_count
 
     for pattern, reason in HARD_RISK_PATTERNS:
@@ -187,14 +187,15 @@ def classify_news_v15(cluster_titles_text, dup_count):
                 return "PR", f"🎺 복붙언플 ({total_cnt}건 · {reason})", reason
             return "PR", f"🎺 자본언플 ({reason})", reason
 
+    safe_text = cluster_titles_text.replace("이탈리아", "이태리")
     for rk in NEWS_KEYWORDS["RISK"]:
-        if rk in cluster_titles_text:
+        if rk in safe_text:
             if total_cnt >= 2:
                 return "RISK", f"🚨 쟁점확산 ({total_cnt}건 · {rk})", rk
             return "RISK", f"🚨 리스크 ({rk})", rk
 
     for pk in NEWS_KEYWORDS["PR"]:
-        if pk in cluster_titles_text:
+        if pk in safe_text:
             if total_cnt >= 2:
                 return "PR", f"🎺 복붙언플 ({total_cnt}건 · {pk})", pk
             return "PR", f"🎺 자본언플 ({pk})", pk
@@ -210,7 +211,7 @@ def get_latest_news():
 
     naver_queries = [
         ("더본코리아 OR 백종원 OR 빽다방", '1'),
-        ("더본코리아 OR 백종원 논란 OR 고소 OR 해지 OR 유출 OR 수렁 OR 반토막 OR 위축", '0'),
+        ("더본코리아 OR 백종원 논란 OR 고소 OR 해지 OR 유출 OR 수렁 OR 반토막 OR 순감", '0'),
         ("더본코리아 OR 백종원 OR 빽다방", '0')
     ]
     for q_str, sort_mode in naver_queries:
@@ -243,7 +244,7 @@ def get_latest_news():
 
     rss_queries = [
         "백종원 OR 더본코리아 OR 빽다방 OR 빽보이피자 when:7d",
-        "(백종원 OR 더본코리아) (논란 OR 고소 OR 해지 OR 유출 OR 무혐의 OR 수렁 OR 반토막 OR 휘청) when:14d"
+        "(백종원 OR 더본코리아) (논란 OR 고소 OR 해지 OR 유출 OR 무혐의 OR 수렁 OR 반토막 OR 순감) when:14d"
     ]
     for rq in rss_queries:
         rss_url = f"https://news.google.com/rss/search?q={quote(rq)}&hl=ko&gl=KR&ceid=KR:ko"
@@ -291,7 +292,7 @@ def get_latest_news():
         main = cl['main']
         dups = cl['dups']
         all_titles_in_cluster = " ".join([main['pure_title']] + [d['pure_title'] for d in dups])
-        cat_code, cat_label, ai_reason = classify_news_v15(all_titles_in_cluster, len(dups))
+        cat_code, cat_label, ai_reason = classify_news_v16(all_titles_in_cluster, len(dups))
         scored_clusters.append({
             'title': f"{main['pure_title']} - {main['press']}",
             'pure_title': all_titles_in_cluster,
@@ -318,10 +319,10 @@ def get_stock_and_disclosures(ticker_code="475560"):
     margin_call_price = 6875
 
     stock_info = {
-        'price': '오류', 'raw_price': 12850, 'change_str': '-',
+        'price': '오류', 'raw_price': 12820, 'change_str': '-',
         'vol': '-', 'ipo_drop': '-', 'peak_drop': '-', 'margin_safety': 50,
-        'mcap_str': '1,894억 원', 'mcap_lost_str': '-7,613억 원',
-        'paik_val_str': '1,129억 원', 'from_52w_low': '+5.9%',
+        'mcap_str': '1,890억 원', 'mcap_lost_str': '-7,618억 원',
+        'paik_val_str': '1,127억 원', 'from_52w_low': '+5.7%',
         'chart_day': '', 'chart_c_day': '', 'chart_c_week': '', 'chart_c_month': '',
         'disclosures': []
     }
@@ -393,31 +394,32 @@ def get_stock_and_disclosures(ticker_code="475560"):
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 4. 📺 유튜브 V15 수집 엔진 (TBK·더본테이스티는 [본영상 2개 + 쇼츠 2개] 동시 보장 쿼터제 적용) ---
+# --- 4. 📺 유튜브 V16 수집 엔진 (전 채널 4개씩 출력 + Mr. Paik 미국채널 박제 + 서브 공식채널 롱폼+쇼츠 최신 4개) ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
         "handle": "https://www.youtube.com/@studio_OZN",
         "id": "", "sample_vid": "ZwHixkCDwaQ",
-        "mode": "LONG_ONLY",
+        "mode": "LONG_ONLY",  # 최신 롱폼 4개
         "owner_keywords": ["오재나", "studio_OZN"],
         "search_query": "김재환의 오재나 백종원",
         "fallback": [
-            {"vid": "ZwHixkCDwaQ", "title": "백종원과 변호사X는 몇 명이나 고소했을까? #오재나 #김재환PD #모욕죄 #모욕죄고소 #펨코 #DC #종토방", "date": "6시간 전", "views": "38,400회", "is_short": False},
+            {"vid": "ZwHixkCDwaQ", "title": "백종원과 변호사X는 몇 명이나 고소했을까? #오재나 #김재환PD #모욕죄 #모욕죄고소 #펨코 #DC #종토방", "date": "1일 전", "views": "38,400회", "is_short": False},
             {"vid": "INoddmJf6dE", "title": "모욕죄는 백종원을 위한 법인가? #에펨코리아 #모욕죄 #김재환PD #오재나 #펨코", "date": "2주 전", "views": "731,925회", "is_short": False},
-            {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "3주 전", "views": "634,231회", "is_short": False}
+            {"vid": "0Gsvn_I6z1w", "title": "안티 댓글을 양산하는 더본코리아와 정솔의 마법 #백종원 #김재환 #종토방고소위협 #오재나", "date": "3주 전", "views": "634,231회", "is_short": False},
+            {"vid": "4fALTQTUldU", "title": "연돈볼카츠 합의안 타결! 나머지 점주들은 신났을까? #백종원 #김재환 #더본코리아", "date": "1개월 전", "views": "1,500,179회", "is_short": False}
         ]
     },
     {
         "name": "탐코 : 탐욕의 코리아", "group": "CRITIC",
         "handle": "https://www.youtube.com/@tamkorea",
         "id": "UC1rn5BnUdP1OGI6vnxh0IbQ", "sample_vid": "LbNF4wQJ9sk",
-        "mode": "LONG_ONLY",
+        "mode": "LONG_ONLY",  # 최신 롱폼 4개
         "owner_keywords": ["탐코", "탐욕의 코리아", "tamkorea"],
         "search_query": "탐코 탐욕의 코리아 백종원",
         "fallback": [
-            {"vid": "LbNF4wQJ9sk", "title": "숫자가 가리키는 백종원의 종말", "date": "2주 전", "views": "18,388회", "is_short": False},
-            {"vid": "RkFbcgPNofs", "title": "무너진 백종원 대기업의 꿈", "date": "2주 전", "views": "21,497회", "is_short": False},
+            {"vid": "LbNF4wQJ9sk", "title": "숫자가 가리키는 백종원의 종말", "date": "2주 전", "views": "18,536회", "is_short": False},
+            {"vid": "RkFbcgPNofs", "title": "무너진 백종원 대기업의 꿈", "date": "2주 전", "views": "21,673회", "is_short": False},
             {"vid": "cpvolw4BJqg", "title": "백종원을 파멸시킬 세 부류의 인간", "date": "3주 전", "views": "61,912회", "is_short": False}
         ]
     },
@@ -425,51 +427,69 @@ YOUTUBE_CHANNELS = [
         "name": "조선연예실록", "group": "CRITIC",
         "handle": "https://www.youtube.com/@tvsillok",
         "id": "", "sample_vid": "k5djjpipVbE",
-        "mode": "LONG_ONLY",
+        "mode": "LONG_ONLY",  # 최신 롱폼 4개
         "owner_keywords": ["조선연예실록", "tvsillok"],
         "search_query": "조선연예실록 백종원",
         "fallback": [
-            {"vid": "k5djjpipVbE", "title": "믿었던 빽다방마저 배신하려나?", "date": "19시간 전", "views": "57,916회", "is_short": False},
-            {"vid": "HBakbY09OtM", "title": "백종원 날개가 없다", "date": "1일 전", "views": "52,538회", "is_short": False},
-            {"vid": "aFV6CdkKGeY", "title": "백종원 씨는 국민을 무시하지 마세요", "date": "8일 전", "views": "48,563회", "is_short": False}
+            {"vid": "k5djjpipVbE", "title": "믿었던 빽다방마저 배신하려나?", "date": "2일 전", "views": "57,916회", "is_short": False},
+            {"vid": "HBakbY09OtM", "title": "백종원 날개가 없다", "date": "3일 전", "views": "52,538회", "is_short": False},
+            {"vid": "aFV6CdkKGeY", "title": "백종원 씨는 국민을 무시하지 마세요", "date": "10일 전", "views": "48,563회", "is_short": False},
+            {"vid": "P2tEH9SR4aE", "title": "백종원 피자 배달에 보이는 위생관념", "date": "12일 전", "views": "98,058회", "is_short": False}
         ]
     },
     {
         "name": "백종원 본채널", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@paik_jongwon",
         "id": "UCyn-K7rZLXjGl7VXGweIlcA", "sample_vid": "6NnIoQ1mOKY",
-        "mode": "LONG_ONLY",
+        "mode": "LONG_ONLY",  # 백종원 본채널은 최신 롱폼 4개
         "owner_keywords": ["백종원", "PAIK JONG WON"],
         "search_query": "백종원 PAIK JONG WON",
         "fallback": [
-            {"vid": "6NnIoQ1mOKY", "title": "겨울 바다의 맛을 제대로 담은 통영굴짬뽕 먹으러 왔습니다", "date": "4일 전", "views": "993,870회", "is_short": False},
+            {"vid": "6NnIoQ1mOKY", "title": "겨울 바다의 맛을 제대로 담은 통영굴짬뽕 먹으러 왔습니다", "date": "6일 전", "views": "993,870회", "is_short": False},
             {"vid": "fGPEmOd53BY", "title": "피자 배달 알바합니다! 그런데 사람들이 못 알아봅니다ㅋㅋ", "date": "1주 전", "views": "1,364,758회", "is_short": False},
-            {"vid": "KNG-_c_p87k", "title": "[출장 중 배고파_청두] 1시간 40분 웨이팅?! 청두식 마라훠궈의 진짜 매운맛을 보여드립니다", "date": "12일 전", "views": "348,657회", "is_short": False}
+            {"vid": "KNG-_c_p87k", "title": "[출장 중 배고파_청두] 1시간 40분 웨이팅?! 청두식 마라훠궈의 진짜 매운맛을 보여드립니다", "date": "2주 전", "views": "348,657회", "is_short": False},
+            {"vid": "9a0n0ZWrLRI", "title": "[출장 중 배고파_일본 오사카] 현지 직장인들이 줄 서서 먹는다는 일본식 돼지고기 스테이크", "date": "3주 전", "views": "569,011회", "is_short": False}
+        ]
+    },
+    {
+        "name": "Mr. Paik (미국 진출용 신설)", "group": "OFFICIAL",
+        "handle": "https://www.youtube.com/@mr.paik_us_official",
+        "id": "", "sample_vid": "IMKlMFCdT5M",
+        "mode": "ALL_LATEST",  # 롱폼+쇼츠 통합 최신 4개
+        "owner_keywords": ["Mr. Paik", "Mr.Paik_US_Official"],
+        "search_query": "\"Mr. Paik\" Tteokbokki Bulgogi Chapaguri",
+        "fallback": [
+            {"vid": "IMKlMFCdT5M", "title": "[Shorts] Chapaguri with Steak! Ultimate Korean Ramen", "date": "오늘", "views": "923회", "is_short": True},
+            {"vid": "uOcrFY6aC-g", "title": "[Shorts] The Easiest Korean Bulgogi Recipe!", "date": "1일 전", "views": "790회", "is_short": True},
+            {"vid": "j0Q9wDBwdK8", "title": "[Shorts] Crispy Spicy Garlic Korean Fried Chicken Recipe!", "date": "2일 전", "views": "1,798회", "is_short": True},
+            {"vid": "fCFJbPI-U00", "title": "[Shorts] The Easiest Tteokbokki Recipe! Chewy Korean Rice Cakes", "date": "2일 전", "views": "888회", "is_short": True}
         ]
     },
     {
         "name": "TBK (글로벌소스)", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@TBK_theborn",
         "id": "UCbgdcVitzVvWdngVx3OYTmA", "sample_vid": "joHpz7hNmEM",
-        "mode": "MIXED_QUOTA",  # 본영상(롱폼) 2개 + 쇼츠 2개 모두 보장하여 최신순 정렬
+        "mode": "ALL_LATEST",  # 롱폼+쇼츠 통합 최신 4개
         "owner_keywords": ["TBK"],
         "search_query": "TBK 더본코리아 소스",
         "fallback": [
-            {"vid": "joHpz7hNmEM", "title": "미국에서도 그 맛 그대로, K-부대찌개 초간단 레시피", "date": "4개월 전", "views": "14,363회", "is_short": False},
-            {"vid": "PjNYsU3qv3Y", "title": "식당에서 먹는 제육볶음 맛, 이 소스면 끝!", "date": "5개월 전", "views": "46,762회", "is_short": False},
-            {"vid": "FfC_pNkyaT8", "title": "[Shorts] Kimchi Egg Ramyun With Mild Paik Ramyun", "date": "1개월 전", "views": "1,711회", "is_short": True}
+            {"vid": "FfC_pNkyaT8", "title": "[Shorts] Kimchi Egg Ramyun With Mild Paik Ramyun", "date": "1개월 전", "views": "1,711회", "is_short": True},
+            {"vid": "-wHsjUnhoL4", "title": "[Shorts] Dumpling Ramyun with Mild Paik Ramyun", "date": "1개월 전", "views": "356회", "is_short": True},
+            {"vid": "fCRzCl-gqOg", "title": "[Shorts] Mala Ramyun With Mild Paik Ramyun", "date": "1개월 전", "views": "1,247회", "is_short": True},
+            {"vid": "joHpz7hNmEM", "title": "미국에서도 그 맛 그대로, K-부대찌개 초간단 레시피", "date": "4개월 전", "views": "14,363회", "is_short": False}
         ]
     },
     {
         "name": "더본 테이스티", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_tasty",
         "id": "", "sample_vid": "gazC1wTYt3k",
-        "mode": "MIXED_QUOTA",  # 본영상(롱폼) 2개 + 쇼츠 2개 모두 보장하여 최신순 정렬
+        "mode": "ALL_LATEST",  # 롱폼+쇼츠 통합 최신 4개
         "owner_keywords": ["더본 테이스티", "더본테이스티", "theborn_tasty"],
         "search_query": "\"더본 테이스티\"",
         "fallback": [
             {"vid": "gazC1wTYt3k", "title": "침샘 폭발 주의! 대구의 맛, 막창짬뽕 화보 영상 🎬", "date": "4주 전", "views": "111,798회", "is_short": False},
             {"vid": "GdNx1GQAG_A", "title": "찾았다! 연돈튀김덮밥 할인 소식🫶", "date": "1개월 전", "views": "27,791회", "is_short": False},
+            {"vid": "7Om-LNDRQgw", "title": "[Shorts] 연돈튀김덮밥 도시락 속 들리는 소리는?!", "date": "1개월 전", "views": "306회", "is_short": True},
             {"vid": "5Wtv9jpPVWI", "title": "롤링파스타에 미슐랭 파브리 셰프가 등장한 이유는? 🧑‍🍳🍝", "date": "3개월 전", "views": "969,145회", "is_short": False}
         ]
     },
@@ -477,7 +497,7 @@ YOUTUBE_CHANNELS = [
         "name": "더본 NOW", "group": "OFFICIAL",
         "handle": "https://www.youtube.com/@theborn_now",
         "id": "", "sample_vid": "nY3ibLP2xbo",
-        "mode": "MIXED_QUOTA",
+        "mode": "ALL_LATEST",  # 롱폼+쇼츠 통합 최신 4개
         "owner_keywords": ["더본NOW", "더본 NOW", "theborn_now"],
         "search_query": "\"더본NOW\"",
         "fallback": [
@@ -543,7 +563,7 @@ def parse_ko_age_to_minutes(date_str):
             pass
     return 999999
 
-def deduplicate_and_sort_videos(videos, max_count=3, reject_older_than_months=9):
+def deduplicate_and_sort_videos(videos, max_count=4, reject_older_than_months=10):
     if not videos:
         return []
     max_age_min = reject_older_than_months * 43200
@@ -558,7 +578,7 @@ def deduplicate_and_sort_videos(videos, max_count=3, reject_older_than_months=9)
     for v in sorted(videos, key=lambda x: x['_age_min']):
         vid = v.get('vid') or v.get('link', '').split('v=')[-1].split('/')[-1]
         clean_t = re.sub(r'^(\[Shorts\]|\[본영상\])\s*', '', v.get('title', ''), flags=re.IGNORECASE)
-        norm_t = re.sub(r'\W+', '', clean_t).lower()[:22]
+        norm_t = re.sub(r'\W+', '', clean_t).lower()[:24]
         if not vid or not norm_t or vid in seen_vids or norm_t in seen_titles:
             continue
         if v['_age_min'] <= max_age_min:
@@ -744,7 +764,7 @@ def fetch_single_channel(ch):
                         break
 
                 if videos_tab_content:
-                    tab_long_vids = extract_videos_from_innertube(videos_tab_content, 15, force_long_only=True)
+                    tab_long_vids = extract_videos_from_innertube(videos_tab_content, 18, force_long_only=True)
                 elif videos_tab_params:
                     res2 = requests.post(b_url, json={"context": INNERTUBE_CONTEXT, "browseId": cid, "params": videos_tab_params}, headers=COMMON_HEADERS, timeout=3.5)
                     if res2.status_code == 200:
@@ -752,51 +772,33 @@ def fetch_single_channel(ch):
                         for t2 in tabs2:
                             tr2 = t2.get('tabRenderer', {})
                             if tr2.get('content'):
-                                tab_long_vids.extend(extract_videos_from_innertube(tr2.get('content'), 15, force_long_only=True))
+                                tab_long_vids.extend(extract_videos_from_innertube(tr2.get('content'), 18, force_long_only=True))
                 if tab_long_vids:
                     is_live = True
         except Exception:
             pass
 
-    # [핵심] MIXED_QUOTA 모드(TBK, 더본 테이스티, 더본 NOW):
-    # 쇼츠가 롱폼을 전부 밀어내지 못하도록 [최신 본영상(롱폼) 2개 + 최신 쇼츠 2개]를 각각 뽑은 뒤 최신순으로 병합!
-    if mode == 'MIXED_QUOTA':
-        long_pool = [v for v in rss_all if not v.get('is_short')] + tab_long_vids
-        short_pool = [v for v in rss_all if v.get('is_short')]
-
-        # 만약 본영상 풀이 부족하면 백업 스냅샷의 본영상을 보충
+    # [핵심 1] ALL_LATEST 모드 (백종원 본채널을 제외한 더본 공식 채널들: Mr. Paik, TBK, 더본 테이스티, 더본 NOW)
+    # -> 롱폼 + 숏폼 구분 없이 실제 업로드 최신순 4개 출력!
+    if mode == 'ALL_LATEST':
+        all_pool = rss_all + tab_long_vids
         for fb in ch.get('fallback', []):
-            if not fb.get('is_short'):
-                long_pool.append({
-                    'vid': fb['vid'], 'title': fb['title'],
-                    'link': f"https://www.youtube.com/watch?v={fb['vid']}",
-                    'thumb': f"https://i.ytimg.com/vi/{fb['vid']}/mqdefault.jpg",
-                    'date': fb['date'], 'views': fb['views'], 'is_short': False,
-                    '_age_min': parse_ko_age_to_minutes(fb['date'])
-                })
-            else:
-                short_pool.append({
-                    'vid': fb['vid'], 'title': fb['title'],
-                    'link': f"https://www.youtube.com/watch?v={fb['vid']}",
-                    'thumb': f"https://i.ytimg.com/vi/{fb['vid']}/mqdefault.jpg",
-                    'date': fb['date'], 'views': fb['views'], 'is_short': True,
-                    '_age_min': parse_ko_age_to_minutes(fb['date'])
-                })
+            all_pool.append({
+                'vid': fb['vid'], 'title': fb['title'],
+                'link': f"https://www.youtube.com/watch?v={fb['vid']}",
+                'thumb': f"https://i.ytimg.com/vi/{fb['vid']}/mqdefault.jpg",
+                'date': fb['date'], 'views': fb['views'], 'is_short': fb.get('is_short', False),
+                '_age_min': parse_ko_age_to_minutes(fb['date'])
+            })
+        vids = deduplicate_and_sort_videos(all_pool, max_count=4, reject_older_than_months=10)
+        return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids[:4], 'is_live': is_live, 'mode': mode}
 
-        top_longs = deduplicate_and_sort_videos(long_pool, max_count=2, reject_older_than_months=10)
-        for tl in top_longs:
-            if not tl['title'].startswith('[본영상]') and not tl['title'].startswith('[Shorts]'):
-                tl['title'] = f"[본영상] {tl['title']}"
-
-        top_shorts = deduplicate_and_sort_videos(short_pool, max_count=2, reject_older_than_months=6)
-        combined = deduplicate_and_sort_videos(top_longs + top_shorts, max_count=4, reject_older_than_months=10)
-        return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': combined, 'is_live': is_live, 'mode': mode}
-
-    # LONG_ONLY 모드 (오재나, 탐코, 조선연예실록, 백종원 본채널): 쇼츠 배제, 순수 본영상 최신 3개
+    # [핵심 2] LONG_ONLY 모드 (오재나, 탐코, 조선연예실록, 백종원 본채널)
+    # -> 쇼츠를 제외한 순수 롱폼(본영상) 최신순 4개 출력!
     long_candidates = [v for v in rss_all if not v.get('is_short')] + tab_long_vids
-    vids = deduplicate_and_sort_videos(long_candidates, max_count=3, reject_older_than_months=5)
+    vids = deduplicate_and_sort_videos(long_candidates, max_count=4, reject_older_than_months=6)
 
-    if len(vids) < 3 and ch.get('search_query'):
+    if len(vids) < 4 and ch.get('search_query'):
         try:
             s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
             res_s = requests.post(s_url, json={"context": INNERTUBE_CONTEXT, "query": ch['search_query'], "params": "CAI="}, headers=COMMON_HEADERS, timeout=3.5)
@@ -810,11 +812,10 @@ def fetch_single_channel(ch):
                 if found_s:
                     is_live = True
                 long_candidates.extend(found_s)
-                vids = deduplicate_and_sort_videos(long_candidates, max_count=3, reject_older_than_months=5)
+                vids = deduplicate_and_sort_videos(long_candidates, max_count=4, reject_older_than_months=6)
         except Exception:
             pass
 
-    # 오늘 오전 최초공개된 오재나 신작(ZwHixkCDwaQ) 등 최신 스냅샷 병합 보장
     for item in ch.get('fallback', []):
         long_candidates.append({
             'vid': item['vid'], 'title': item['title'],
@@ -823,9 +824,9 @@ def fetch_single_channel(ch):
             'date': item['date'], 'views': item['views'], 'is_short': False,
             '_age_min': parse_ko_age_to_minutes(item['date'])
         })
-    vids = deduplicate_and_sort_videos(long_candidates, max_count=3, reject_older_than_months=5)
+    vids = deduplicate_and_sort_videos(long_candidates, max_count=4, reject_older_than_months=6)
 
-    return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids[:3], 'is_live': is_live, 'mode': mode}
+    return {'name': ch['name'], 'group': ch['group'], 'handle': ch['handle'], 'videos': vids[:4], 'is_live': is_live, 'mode': mode}
 
 def fetch_youtube_hot_search():
     s_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
@@ -956,8 +957,8 @@ def generate_html_string():
     yt_critic_html = ""
     yt_official_html = ""
     for ch in youtube_data:
-        mode_label = "본영상2+쇼츠2 보장" if ch.get('mode') == 'MIXED_QUOTA' else "최신순"
-        status_badge = f"<span style='font-size:0.72em; color:#00e676; margin-left:6px;'>🟢 LIVE ({mode_label})</span>" if ch.get('is_live') else "<span style='font-size:0.72em; color:#8b949e; margin-left:6px;'>⚪ 최신스냅샷</span>"
+        mode_label = "롱폼+쇼츠 최신 4선" if ch.get('mode') == 'ALL_LATEST' else "롱폼 최신 4선"
+        status_badge = f"<span style='font-size:0.72em; color:#00e676; margin-left:6px;'>🟢 LIVE ({mode_label})</span>" if ch.get('is_live') else f"<span style='font-size:0.72em; color:#8b949e; margin-left:6px;'>⚪ 스냅샷 ({mode_label})</span>"
         block = f"<div class='channel-name'><a href='{ch['handle']}' target='_blank'>[{ch['name']}] ↗</a>{status_badge}</div>"
         for v in ch['videos']:
             vid_code = v.get('vid') or v['link'].split('v=')[-1].split('/')[-1]
@@ -999,7 +1000,6 @@ def generate_html_string():
     else:
         yt_search_html = "<div style='color:#888; font-size:0.9em;'>실시간 검색 결과를 불러올 수 없습니다.</div>"
 
-    # 직전 세션에서 1페이지에서 사라진 주요 게시글 초기 검증 시드 (현재 1P/2P에 살아있으면 브라우저가 자동 제외함)
     seed_deleted_candidates = [
         {"no": "848625", "title": "애미창녀자식 종원이 '필독'", "up": "222", "views": "2616", "date": "11.16", "link": "https://gall.dcinside.com/board/view/?id=bjwstreet&no=848625", "confirmed": False, "detectedAt": "이전세션"},
         {"no": "847196", "title": "지하에 배달 공장을 만들어놨네 ㅋㅋㅋ", "up": "193", "views": "6733", "date": "11.14", "link": "https://gall.dcinside.com/board/view/?id=bjwstreet&no=847196", "confirmed": False, "detectedAt": "이전세션"},
@@ -1299,13 +1299,13 @@ def generate_html_string():
             </ul>
         </div>
 
-        <!-- [상단 우측] 3. 유튜브 트래픽 전쟁 -->
+        <!-- [상단 우측] 3. 유튜브 트래픽 전쟁 (전 채널 4선 + Mr.Paik 미국채널 박제) -->
         <div class="card">
-            <h2>📺 유튜브 트래픽 전쟁</h2>
+            <h2>📺 유튜브 트래픽 전쟁 (채널당 최신 4선)</h2>
             <div class="tab-group">
                 <button class="tab-btn active" onclick="switchYtTab('CRITIC', this)">⚡ 비판 (오재나·탐코·실록)</button>
                 <button class="tab-btn" onclick="switchYtTab('SEARCH', this)">🔥 전체 유튜브 최신이슈</button>
-                <button class="tab-btn" onclick="switchYtTab('OFFICIAL', this)">🛡️ 백종원·더본 공식</button>
+                <button class="tab-btn" onclick="switchYtTab('OFFICIAL', this)">🛡️ 백종원·더본 공식 (+미국채널)</button>
             </div>
 
             <div id="inlinePlayerBox" class="inline-player-box">
@@ -1412,7 +1412,7 @@ def generate_html_string():
         const DC_PAGE2_META = {dc_page2_json};
         const SEED_DELETED_CANDIDATES = {seed_deleted_json};
 
-        // 영구 고정 키 이름 사용 (코드 업데이트 시에도 스냅샷과 박제 목록이 절대 초기화되지 않음)
+        // 영구 고정 키 이름 사용
         const NEWS_STORAGE_KEY = 'theborn_news_kw_master';
         const RADAR_STORAGE_KEY = 'theborn_radar_kw_master';
         const MANUAL_NEWS_CAT_KEY = 'theborn_manual_news_cat_master';
@@ -1421,15 +1421,23 @@ def generate_html_string():
         const DC_DELETED_LOG_KEY = 'theborn_dc_deleted_log_master';
         const DC_IGNORED_NOS_KEY = 'theborn_dc_ignored_nos_master';
         const LAST_STOCK_PRICE_KEY = 'theborn_last_stock_master';
+        const AUTO_REFRESH_STATE_KEY = 'theborn_auto_refresh_master';
 
         let currentFilter = 'ALL';
         let activeKeywordFilter = '';
-        let autoRefreshTimer = null;
+        let autoRefreshInterval = null;
+        let remainSeconds = 300;
         let userNewsKw = loadStored(NEWS_STORAGE_KEY, DEFAULT_NEWS_KW);
         let userRadarKw = loadStored(RADAR_STORAGE_KEY, DEFAULT_RADAR_KW);
         let manualNewsCats = loadStored(MANUAL_NEWS_CAT_KEY, {{}});
         let learnedTokens = loadStored(LEARNED_TOKENS_KEY, {{}});
         let ignoredDeletedNos = new Set(loadStored(DC_IGNORED_NOS_KEY, []));
+
+        // 기존에 잘못 학습된 흔한 일반 단어('분기', '연속' 등) 자동 청소
+        ['분기', '연속', '억원', '만원', '매출', '적자', '영업손실'].forEach(badTk => {{
+            if (learnedTokens[badTk]) delete learnedTokens[badTk];
+        }});
+        localStorage.setItem(LEARNED_TOKENS_KEY, JSON.stringify(learnedTokens));
 
         function loadStored(key, fallbackObj) {{
             try {{
@@ -1474,17 +1482,59 @@ def generate_html_string():
             box.style.display = 'none';
         }}
 
-        function toggleAutoRefresh() {{
+        // --- ⏱️ V16 영구 유지형 5분 자동갱신 타이머 (새로고침 후에도 절대 OFF로 풀리지 않음) ---
+        function formatRemainTime(sec) {{
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            return `${{m}}:${{s < 10 ? '0' + s : s}}`;
+        }}
+
+        function startAutoRefreshCountdown() {{
             const btn = document.getElementById('autoRefreshBtn');
-            if (autoRefreshTimer) {{
-                clearInterval(autoRefreshTimer);
-                autoRefreshTimer = null;
-                btn.textContent = '⏱️ 5분 자동갱신: OFF';
-                btn.style.color = '#8b949e';
+            if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+            remainSeconds = 300;
+            btn.style.color = '#00e676';
+            btn.style.borderColor = '#00e676';
+            btn.textContent = `⏱️ 5분 자동갱신: ON (${{formatRemainTime(remainSeconds)}})`;
+
+            autoRefreshInterval = setInterval(() => {{
+                remainSeconds--;
+                if (remainSeconds <= 0) {{
+                    clearInterval(autoRefreshInterval);
+                    location.reload();
+                }} else {{
+                    btn.textContent = `⏱️ 5분 자동갱신: ON (${{formatRemainTime(remainSeconds)}})`;
+                }}
+            }}, 1000);
+        }}
+
+        function stopAutoRefreshCountdown() {{
+            const btn = document.getElementById('autoRefreshBtn');
+            if (autoRefreshInterval) {{
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }}
+            btn.textContent = '⏱️ 5분 자동갱신: OFF';
+            btn.style.color = '#8b949e';
+            btn.style.borderColor = '#3d4659';
+        }}
+
+        function toggleAutoRefresh() {{
+            const isCurrentlyOn = localStorage.getItem(AUTO_REFRESH_STATE_KEY) === 'ON';
+            if (isCurrentlyOn) {{
+                localStorage.setItem(AUTO_REFRESH_STATE_KEY, 'OFF');
+                stopAutoRefreshCountdown();
             }} else {{
-                autoRefreshTimer = setInterval(() => location.reload(), 300000);
-                btn.textContent = '⏱️ 5분 자동갱신: ON';
-                btn.style.color = '#00e676';
+                localStorage.setItem(AUTO_REFRESH_STATE_KEY, 'ON');
+                startAutoRefreshCountdown();
+            }}
+        }}
+
+        function initAutoRefreshState() {{
+            if (localStorage.getItem(AUTO_REFRESH_STATE_KEY) === 'ON') {{
+                startAutoRefreshCountdown();
+            }} else {{
+                stopAutoRefreshCountdown();
             }}
         }}
 
@@ -1502,10 +1552,9 @@ def generate_html_string():
             if (curPrice > 0) localStorage.setItem(LAST_STOCK_PRICE_KEY, String(curPrice));
         }}
 
-        // --- 🦅 V15 골갤 1·2페이지 교차 대조 천안문 감지 & 사용자 개별 관리 ---
+        // --- 🦅 골갤 1·2페이지 교차 대조 천안문 감지 & 사용자 개별 관리 ---
         function getDeletedLog() {{
             let raw = loadStored(DC_DELETED_LOG_KEY, []);
-            // 기존 버전(v14 등) 기록이나 초기 시드 중 아직 무시(✕ 제외)하지 않은 항목 병합
             SEED_DELETED_CANDIDATES.forEach(seed => {{
                 const sNo = String(seed.no);
                 if (!ignoredDeletedNos.has(sNo) && !raw.some(d => String(d.no) === sNo)) {{
@@ -1522,7 +1571,6 @@ def generate_html_string():
         }}
 
         function trackDcPostsAndDeletions() {{
-            // 이전 v14 스냅샷이 있으면 마스터 스냅샷으로 자동 승계
             let prevMap = loadStored(DC_SNAPSHOT_KEY, null);
             if (!prevMap || Object.keys(prevMap).length === 0) {{
                 prevMap = loadStored('theborn_dc_snapshot_v14', {{}});
@@ -1574,7 +1622,6 @@ def generate_html_string():
                 }}
             }});
 
-            // [핵심] 직전 1페이지에 있던 글이 현재 1페이지에도 없고, 2페이지(page2Nos)에도 없으면 천안문(삭제) 후보로 즉시 등록!
             if (prevKeys.length >= 15) {{
                 Object.values(prevMap).forEach(oldPost => {{
                     const sNo = String(oldPost.no);
@@ -1592,7 +1639,6 @@ def generate_html_string():
                 }});
             }}
 
-            // 미확정(confirmed=false) 항목 중 현재 1페이지나 2페이지에 멀쩡히 살아있는 글은 자동으로 목록에서 제외
             deletedLog = deletedLog.filter(d => {{
                 if (d.confirmed) return true;
                 const sNo = String(d.no);
@@ -1723,13 +1769,13 @@ def generate_html_string():
             renderDeletedDcLog([]);
         }}
 
-        // --- 🔥 V15 핵심 명사 레이더 (복합명사 두 글자 잘림 현상 및 용언 추출 버그 완치) ---
+        // --- 🔥 핵심 명사 레이더 ---
         const JOSA_REGEX = /(에서부터|으로부터|에서|으로|이랑|하고|부터|까지|마저|조차|에게|한테|처럼|보다|라고|이라|다는|라는|은|는|이|가|을|를|의|에|로|과|와|도|만|한|할|함|임)$/;
         const PRED_REGEX = /(없어|없어도|없어서|있어|있어도|있어서|같아|같아서|있다|없다|같다|되다|하다|이다|봤다|왔다|갔다|했다|됐다|난다|준다|본다|한다|된다|하면|되면|오면|가면|보면|치면|쓰면|알면|나면|주면|받으면|먹으면|겠냐|겠노|겠네|하노|하냐|하나|할까|볼까|하자|해라|마라|거임|건가|인듯|인가|구만|구나|던데|는데|길래|잖아|더라|봐유|애유|네유|햇네|했네)$/;
 
         function normalizeNoun(word, stopSet, boostList) {{
             let w = word.toLowerCase().replace(/[ㄱ-ㅎㅏ-ㅣ]+/g, '');
-            if (w.length < 2 || /^\\d+$/.test(w) || /^\\d+[월일편명개년배위곳잔만원호%시분초]+$/.test(w)) return '';
+            if (w.length < 2 || /^\\d+$/.test(w) || /^\\d+[월일편명개년배위곳잔만원호%시분초분기]+$/.test(w)) return '';
             if (stopSet.has(w) || PRED_REGEX.test(w)) return '';
 
             for (const bw of boostList) {{
@@ -1750,7 +1796,6 @@ def generate_html_string():
 
         function recomputeRadarKeywords() {{
             const stopSet = new Set(userRadarKw.STOP.map(s => s.toLowerCase()));
-            // 긴 복합명사부터 먼저 매칭되도록 길이 내림차순 정렬
             const boostList = [...(userRadarKw.BOOST || [])].sort((a, b) => b.length - a.length);
             const boostSet = new Set(boostList.map(b => b.toLowerCase()));
             const freq = {{}};
@@ -1759,7 +1804,6 @@ def generate_html_string():
                 const perTitleSet = new Set();
                 let remainingTitle = title;
 
-                // 1단계: BOOST 복합명사를 먼저 추출하고 해당 부분을 공백으로 치환해 두 글자로 쪼개지는 현상 차단
                 boostList.forEach(bw => {{
                     const bLow = bw.toLowerCase();
                     if (remainingTitle.toLowerCase().includes(bLow) && !stopSet.has(bLow)) {{
@@ -1768,7 +1812,6 @@ def generate_html_string():
                     }}
                 }});
 
-                // 2단계: 남은 문자열에서 일반 명사 추출
                 const matches = remainingTitle.match(/[가-힣A-Za-z0-9]{{2,}}/g) || [];
                 matches.forEach(rawW => {{
                     const norm = normalizeNoun(rawW, stopSet, boostList);
@@ -1780,7 +1823,6 @@ def generate_html_string():
                 }});
             }});
 
-            // BOOST 복합명사는 절대 짧은 단어로 축약하지 않음
             const sorted = Object.entries(freq)
                 .filter(([_, cnt]) => cnt >= 2)
                 .sort((a, b) => b[1] - a[1])
@@ -1884,7 +1926,8 @@ def generate_html_string():
 
         const LEARN_STOP_WORDS = new Set([
             '백종원', '백종원의', '백종원이', '더본코리아', '더본', '대표', '빽다방', '홍콩반점',
-            '3분기', '2분기', '1분기', '4분기', '올해', '내년', '하루', '오늘', '최근', '단독', '종합'
+            '3분기', '2분기', '1분기', '4분기', '분기', '연속', '억원', '만원', '매출', '적자', '영업손실', '적자폭',
+            '올해', '내년', '하루', '오늘', '최근', '단독', '종합', '해외', '중국', '글로벌', '사업'
         ]);
 
         function extractLearnableTokens(titleText) {{
@@ -1897,7 +1940,7 @@ def generate_html_string():
                     out.push(clean);
                 }}
             }});
-            return out.slice(0, 5);
+            return out.slice(0, 4);
         }}
 
         function learnFromManualClassification(titleText, targetCat) {{
@@ -2032,29 +2075,29 @@ def generate_html_string():
 
         const JS_HARD_RISK = [
             [/믿었는데|떠나가자|다\s*떠나|등\s*돌린|곡소리|비명|외면|눈물/, '가맹점주 이탈·원성'],
-            [/가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|급감|해지.*급증|가맹점\s*이탈|점주\s*이탈|매출\s*위축|가맹사업.*흔들/, '가맹해지·매출 위축'],
+            [/가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|50곳\s*순감|꺾였다|급감|해지.*급증|가맹점\s*이탈|점주\s*이탈|매출\s*위축|가맹사업.*흔들/, '가맹해지·매출 위축'],
             [/적자\s*수렁|반토막|적자\s*전환|무색|3분기도\s*적자|연속\s*적자.*폭락|주가.*폭락|신저가|국내는.*휘청|국내.*휘청|부진의\s*수렁/, '실적 악화·적자 수렁'],
             [/유출|침해|해킹|KISA|개인정보|계좌정보|보안\s*논란|수탁사/, '개인정보·보안 사고'],
-            [/무더기\s*고소|종토방.*고소|변호사\s*일침|처벌\s*우려|처벌대상|소송\s*위험|무혐의|청구포기|패소|피고소/, '고소 남발·법적 분쟁'],
+            [/무더기\s*고소|수백명\s*고소|쪼개기|합의금\s*장사|종토방.*고소|변호사\s*일침|처벌\s*우려|처벌대상|소송\s*위험|무혐의|청구포기|패소|피고소/, '고소 남발·법적 분쟁'],
             [/위생|원산지|꼼수|책임\s*회피|외주\s*탓|갑질|공정위|국감|불똥|경영\s*부담.*가중|끊이지\s*않는\s*악재|0원\s*쿠폰.*논란/, '경영 논란·오너리스크']
         ];
 
         const JS_SPIN_PR = [
-            [/오너\s*리스크\s*해소|리스크.*완화|백종원\s*일냈다/, '오너리스크 해소 억빠'],
+            [/오너\s*리스크\s*해소|리스크.*완화|백종원\s*일냈다|반등\s*열쇠\s*될까/, '오너리스크 해소·반등 억빠'],
             [/(적자|영업손실|영업적자|손실).*(줄었다|줄였다|줄여|감소|축소|개선|원가\s*잡았다)/, '적자 축소 물타기'],
             [/(줄었다|줄였다|줄여|감소|축소|개선).*(적자|영업손실|영업적자|손실)/, '적자 축소 물타기']
         ];
 
         const JS_STANDARD_PR = [
-            [/중국.*매장.*확대|상하이|하루\s*1000잔|불티|무섭게\s*팔린다|中\s*진출|영토\s*확장|아망추.*인기|출점\s*가속|대박\s*조짐|추가\s*출점/, '중국 빽다방 홍보'],
-            [/우녹스|이탈리아\s*오븐|맛\s*표준화|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재|오븐\s*시장|유럽.*투트랙|꺼낸\s*승부수/, '해외·오븐 제휴 홍보'],
+            [/중국.*매장.*확대|상하이|하루\s*1000잔|불티|무섭게\s*팔린다|中\s*진출|영토\s*확장|아망추.*인기|출점\s*가속|대박\s*조짐|추가\s*출점|더\s*낸다|연착륙/, '중국 빽다방 홍보'],
+            [/우녹스|이탈리아\s*오븐|맛\s*표준화|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재|오븐\s*시장|유럽.*투트랙|꺼낸\s*승부수|배달전문점\s*실험/, '해외·신사업 홍보'],
             [/피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\s*배달|하루\s*배달|일일\s*라이더|치즈킥|소방서/, '유튜브 배달쇼 홍보'],
             [/소유진|아트하우스|대저택|미술관|내조|애셋맘/, '오너 일가 화제성 언플'],
             [/통영\s*굴|통영굴짬뽕|팔도\s*짬뽕|신제품|신메뉴|출시|선보|프로모션|할인|특가|이벤트|나눔점|기부|체험행사/, '신메뉴·이벤트 홍보'],
             [/\[똑똑한|\[유통가|\[푸드|브리핑|단신|꽂힌\s*소스시장|성장동력\s*확보/, '보도자료·업계 홍보']
         ];
 
-        function classifySingleTitleV15(rawTitle, totalCnt, newsKey) {{
+        function classifySingleTitleV16(rawTitle, totalCnt, newsKey) {{
             if (manualNewsCats[newsKey]) {{
                 const mCat = manualNewsCats[newsKey];
                 const mLabels = {{ 'RISK': '🚨 수동지정: 리스크', 'PR': '🎺 수동지정: 언플', 'GEN': '📰 수동지정: 일반' }};
@@ -2082,7 +2125,6 @@ def generate_html_string():
                     if (info.cat === 'GEN') return ['GEN', `📰 학습판독: 일반 (${{tk}})`, false];
                 }}
             }}
-            // '이탈리아'가 '이탈' 키워드에 매칭되지 않도록 방어
             const safeTitleForKw = rawTitle.replace(/이탈리아/g, '이태리');
             const matchedRisk = userNewsKw.RISK.find(rk => safeTitleForKw.includes(rk));
             if (matchedRisk) {{
@@ -2114,7 +2156,7 @@ def generate_html_string():
                     return;
                 }}
 
-                const [cat, label, isManual] = classifySingleTitleV15(rawTitle, totalCnt, newsKey);
+                const [cat, label, isManual] = classifySingleTitleV16(rawTitle, totalCnt, newsKey);
 
                 li.setAttribute('data-cat', cat);
                 const badgeEl = li.querySelector('.n-badge');
@@ -2192,6 +2234,7 @@ def generate_html_string():
             document.getElementById('ytOfficialBox').style.display = (group === 'OFFICIAL') ? 'block' : 'none';
         }}
 
+        initAutoRefreshState();
         checkLastVisitStock();
         trackDcPostsAndDeletions();
         renderRadarTags();
@@ -2220,4 +2263,4 @@ if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V15 업데이트 완료!")
+    print("✅ theborn_dashboard.html V16 업데이트 완료!")
