@@ -3,6 +3,7 @@ import re
 import json
 import time
 import requests
+from difflib import SequenceMatcher
 from bs4 import BeautifulSoup
 import feedparser
 from datetime import datetime, timezone, timedelta
@@ -55,7 +56,7 @@ RADAR_KEYWORDS = {
     ],
     "STOP": [
         "단독", "포토", "칼럼", "데스크칼럼", "인터뷰", "기획", "속보", "신고", "직원", "일반",
-        "머니투데이", "머니투데", "연합뉴스", "한국경제", "매일경제", "서울경제", "이데일리", "뉴스1", "뉴시스",
+        "머니투데이", "머니투데", "연합뉴스", "한국경제", "매일경제", "서울경제", "이데일리", "뉴스1", "뉴시스", "헤럴드경제", "지디넷코리아",
         "없어", "없어도", "없어서", "있어", "있어도", "많은", "적은", "빠른", "개인적", "개인", "영업", "분기",
         "근데", "아니", "진짜", "이거", "저거", "뭔가", "이제", "와서", "혹시", "니들",
         "알고", "어쩌라고", "백종원", "백종원이", "백종원의", "백종원씨", "더본", "더본코리아",
@@ -136,13 +137,69 @@ def get_dc_best_posts_with_page2():
     p2_meta = {'nos': [x['no'] for x in p2], 'titles': [x['title'] for x in p2]}
     return p1, p2_meta
 
-# --- 2. 4단계 한국어 기사 문맥 대조 & 물타기 언플 판독 엔진 ---
-STOP_WORDS = {'더본코리아', '더본', '백종원', '백종원의', '대표', '빽다방', '홍콩반점', '프랜차이즈', '외식', '진행', '운영', '출시'}
+# --- 2. V18 정밀 뉴스 판독 및 중복 클러스터링 엔진 (눈덩이 병합 버그 완치) ---
+CLUSTER_STOP_WORDS = {
+    '더본코리아', '더본', '백종원', '백종원의', '백종원이', '대표', '프랜차이즈', '외식', '진행', '운영', '출시',
+    '종합', '단독', '속보', '포토', '칼럼', '기자', '오늘', '최근', '올해', '내년', '이번', '국내', '해외', '사업'
+}
+JOSA_STRIP_RE = re.compile(r'(에서부터|으로부터|에서|으로|이랑|하고|부터|까지|마저|조차|에게|한테|처럼|보다|은|는|이|가|을|를|의|에|로|과|와|도|만)$')
 
-def extract_tokens(title):
-    clean_t = title.rsplit(' - ', 1)[0]
-    words = re.findall(r'[가-힣A-Za-z0-9]{2,}', clean_t)
-    return {w for w in words if w not in STOP_WORDS}
+def clean_press_suffix(title, press):
+    """구글 RSS 등에서 '제목 - 머니투데이 - 머니투데이'처럼 언론사명이 중복 붙는 현상 제거"""
+    t = title.strip()
+    p = press.strip()
+    if p:
+        suffix = f" - {p}"
+        while t.endswith(suffix):
+            t = t[:-len(suffix)].strip()
+    # 끝에 남은 찌꺼기 언론사명 패턴 정리
+    t = re.sub(r'\s+-\s+(머니투데이|연합뉴스|뉴시스|뉴스1|한국경제|매일경제|서울경제|이데일리|헤럴드경제|지디넷코리아)$', '', t).strip()
+    return t
+
+def extract_cluster_tokens(title):
+    words = re.findall(r'[가-힣A-Za-z0-9]{2,}', title)
+    tokens = set()
+    for w in words:
+        w_low = w.lower()
+        stemmed = JOSA_STRIP_RE.sub('', w_low)
+        cand = stemmed if len(stemmed) >= 2 else w_low
+        if cand not in CLUSTER_STOP_WORDS and len(cand) >= 2:
+            tokens.add(cand)
+    return tokens
+
+def is_same_news_story(item_a, item_b):
+    """
+    두 기사가 진짜 동일 보도자료·동일 이슈의 중복 기사인지 정밀 판별:
+    1) 성향(RISK / PR / GEN)이 다르면 절대 묶지 않음
+    2) 핵심 토큰 겹침 비율(Overlap Coeff) + 문자열 유사도(SequenceMatcher) 이중 검증
+    """
+    if item_a['cat_code'] != item_b['cat_code']:
+        return False
+
+    t1, t2 = item_a['tokens'], item_b['tokens']
+    if not t1 or not t2:
+        return False
+
+    common = t1 & t2
+    min_len = min(len(t1), len(t2))
+    overlap_ratio = len(common) / min_len if min_len > 0 else 0.0
+
+    # 문자열 자체 유사도 (띄어쓰기/기호 제거 후 비교)
+    s1 = re.sub(r'\W+', '', item_a['pure_title'])
+    s2 = re.sub(r'\W+', '', item_b['pure_title'])
+    seq_ratio = SequenceMatcher(None, s1, s2).ratio()
+
+    # 조건 A: 제목 문자열 자체가 매우 비슷함 (복붙 보도자료)
+    if seq_ratio >= 0.50:
+        return True
+    # 조건 B: 고유 핵심 키워드가 3개 이상 겹치면서 짧은 제목 기준 45% 이상 일치
+    if len(common) >= 3 and overlap_ratio >= 0.45:
+        return True
+    # 조건 C: 짧은 제목(토큰 4개 이하)에서 핵심어 2개 이상 & 55% 이상 일치 + 문자열 유사도 0.35 이상
+    if min_len <= 4 and len(common) >= 2 and overlap_ratio >= 0.55 and seq_ratio >= 0.35:
+        return True
+
+    return False
 
 HARD_RISK_PATTERNS = [
     (r"(믿었는데|떠나가자|다\s*떠나|등\s*돌린|곡소리|비명|외면|눈물)", "가맹점주 이탈·원성"),
@@ -169,28 +226,28 @@ STANDARD_PR_PATTERNS = [
     (r"(\[똑똑한|\[유통가|\[푸드|브리핑|단신|꽂힌\s*소스시장|성장동력\s*확보)", "보도자료·업계 홍보")
 ]
 
-def classify_news_v17(cluster_titles_text, dup_count):
+def classify_news_v18(text, dup_count=0):
     total_cnt = 1 + dup_count
 
     for pattern, reason in HARD_RISK_PATTERNS:
-        if re.search(pattern, cluster_titles_text):
+        if re.search(pattern, text):
             if total_cnt >= 2:
                 return "RISK", f"🚨 쟁점확산 ({total_cnt}건 · {reason})", reason
             return "RISK", f"🚨 리스크 ({reason})", reason
 
     for pattern, reason in SPIN_PR_PATTERNS:
-        if re.search(pattern, cluster_titles_text):
+        if re.search(pattern, text):
             if total_cnt >= 2:
                 return "PR", f"🎺 복붙언플 ({total_cnt}건 · {reason})", reason
             return "PR", f"🎺 물타기언플 ({reason})", reason
 
     for pattern, reason in STANDARD_PR_PATTERNS:
-        if re.search(pattern, cluster_titles_text):
+        if re.search(pattern, text):
             if total_cnt >= 2:
                 return "PR", f"🎺 복붙언플 ({total_cnt}건 · {reason})", reason
             return "PR", f"🎺 자본언플 ({reason})", reason
 
-    safe_text = cluster_titles_text.replace("이탈리아", "이태리")
+    safe_text = text.replace("이탈리아", "이태리")
     for rk in NEWS_KEYWORDS["RISK"]:
         if rk in safe_text:
             if total_cnt >= 2:
@@ -226,19 +283,20 @@ def get_latest_news():
                 title_el = item.select_one('.news_tit') or item.select_one('a[href*="news.naver.com"]')
                 if not title_el:
                     continue
-                title = (title_el.get('title') or title_el.text or '').strip()
+                raw_t = (title_el.get('title') or title_el.text or '').strip()
+                press_el = item.select_one('.info.press') or item.select_one('.press')
+                press = press_el.text.replace('언론사 선정', '').strip() if press_el else '언론보도'
+                title = clean_press_suffix(raw_t, press)
                 if not title or any(sp in title for sp in NEWS_KEYWORDS["SPAM"]):
                     continue
                 if not any(k in title for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공', '역전우동', '흑백요리사']):
                     continue
-                key = re.sub(r'\W+', '', title)[:18]
+                key = re.sub(r'\W+', '', title)[:20]
                 if key in seen_titles:
                     continue
                 seen_titles.add(key)
 
                 link = title_el.get('href', '#')
-                press_el = item.select_one('.info.press') or item.select_one('.press')
-                press = press_el.text.replace('언론사 선정', '').strip() if press_el else '언론보도'
                 info_spans = item.select('span.info')
                 date_str = info_spans[-1].text.strip() if info_spans else '최신'
                 raw_list.append({'pure_title': title, 'press': press, 'link': link, 'date': date_str})
@@ -259,11 +317,11 @@ def get_latest_news():
                 if any(sp in full_t for sp in NEWS_KEYWORDS["SPAM"]):
                     continue
                 parts = full_t.rsplit(' - ', 1)
-                pure_t = parts[0].strip()
                 press = parts[1].strip() if len(parts) > 1 else '뉴스'
+                pure_t = clean_press_suffix(parts[0], press)
                 if not any(k in pure_t for k in ['백종원', '더본', '빽다방', '소유진', '홍콩반점', '연돈', '새마을식당', '빽보이', '신공', '역전우동', '흑백요리사']):
                     continue
-                key = re.sub(r'\W+', '', pure_t)[:18]
+                key = re.sub(r'\W+', '', pure_t)[:20]
                 if key in seen_titles:
                     continue
                 seen_titles.add(key)
@@ -273,32 +331,37 @@ def get_latest_news():
             pass
 
     if not raw_list:
-        return [{'title': '뉴스 로딩 실패', 'pure_title': '뉴스 로딩 실패', 'link': '#', 'date': '-', 'cat_code': 'GEN', 'cat_label': '오류', 'dups': [], 'ai_reason': ''}]
+        return [{'title': '뉴스 로딩 실패', 'pure_title': '뉴스 로딩 실패', 'press': '-', 'link': '#', 'date': '-', 'cat_code': 'GEN', 'cat_label': '오류', 'dups': [], 'ai_reason': ''}]
 
+    # [핵심 수정 1] 묶기 전에 각 기사를 먼저 개별 판독 + 토큰 추출
+    for item in raw_list:
+        cat_code, _, _ = classify_news_v18(item['pure_title'], 0)
+        item['cat_code'] = cat_code
+        item['tokens'] = extract_cluster_tokens(item['pure_title'])
+
+    # [핵심 수정 2] 눈덩이 누적(|=) 금지! 오직 대표 기사(main) 1건과 1:1 정밀 비교하여 진짜 중복만 묶음
     clusters = []
     for item in raw_list:
-        tokens = extract_tokens(item['pure_title'])
         matched_cluster = None
         for cl in clusters:
-            if len(tokens & cl['tokens']) >= 3:
+            if is_same_news_story(item, cl['main']):
                 matched_cluster = cl
                 break
         if matched_cluster:
             if item['press'] != matched_cluster['main']['press'] and item['press'] not in [d['press'] for d in matched_cluster['dups']]:
                 matched_cluster['dups'].append(item)
-                matched_cluster['tokens'] |= tokens
         else:
-            clusters.append({'main': item, 'tokens': tokens, 'dups': []})
+            clusters.append({'main': item, 'dups': []})
 
     scored_clusters = []
     for cl in clusters:
         main = cl['main']
         dups = cl['dups']
-        all_titles_in_cluster = " ".join([main['pure_title']] + [d['pure_title'] for d in dups])
-        cat_code, cat_label, ai_reason = classify_news_v17(all_titles_in_cluster, len(dups))
+        cat_code, cat_label, ai_reason = classify_news_v18(main['pure_title'], len(dups))
         scored_clusters.append({
-            'title': f"{main['pure_title']} - {main['press']}",
-            'pure_title': all_titles_in_cluster,
+            'title': main['pure_title'],
+            'press': main['press'],
+            'pure_title': main['pure_title'],
             'link': main['link'],
             'date': main['date'],
             'cat_code': cat_code,
@@ -309,7 +372,7 @@ def get_latest_news():
 
     risk_items = [c for c in scored_clusters if c['cat_code'] == 'RISK']
     other_items = [c for c in scored_clusters if c['cat_code'] != 'RISK']
-    return (risk_items[:12] + other_items)[:28]
+    return (risk_items[:13] + other_items)[:30]
 
 # --- 3. 네이버 금융 주가 + 펀더멘털/시총 증발 계산 + 전자공시 ---
 def get_stock_and_disclosures(ticker_code="475560"):
@@ -322,7 +385,7 @@ def get_stock_and_disclosures(ticker_code="475560"):
     margin_call_price = 6875
 
     stock_info = {
-        'price': '오류', 'raw_price': 12830, 'change_str': '-',
+        'price': '오류', 'raw_price': 12830, 'change_str': '-', 'change_plain': '0.00%', 'change_color': '#94a3b8',
         'vol': '-', 'ipo_drop': '-', 'peak_drop': '-', 'margin_safety': 50,
         'mcap_str': '1,891억 원', 'mcap_lost_str': '-7,616억 원',
         'paik_val_str': '1,128억 원', 'from_52w_low': '+5.8%',
@@ -342,11 +405,17 @@ def get_stock_and_disclosures(ticker_code="475560"):
         rf = str(item['rf'])
         
         if rf in ['1', '2']:
-            stock_info['change_str'] = f"<span style='color:#ff5252; font-weight:bold;'>▲ {cv:,} (+{cr}%)</span>"
+            stock_info['change_color'] = '#ff5252'
+            stock_info['change_plain'] = f"▲ {cv:,} (+{cr}%)"
+            stock_info['change_str'] = f"<span style='color:#ff5252; font-weight:700;'>▲ {cv:,} (+{cr}%)</span>"
         elif rf in ['4', '5']:
-            stock_info['change_str'] = f"<span style='color:#42a5f5; font-weight:bold;'>▼ {cv:,} (-{cr}%)</span>"
+            stock_info['change_color'] = '#38bdf8'
+            stock_info['change_plain'] = f"▼ {cv:,} (-{cr}%)"
+            stock_info['change_str'] = f"<span style='color:#38bdf8; font-weight:700;'>▼ {cv:,} (-{cr}%)</span>"
         else:
-            stock_info['change_str'] = f"<span style='color:#e0e0e0; font-weight:bold;'>- {cv:,} (0.00%)</span>"
+            stock_info['change_color'] = '#94a3b8'
+            stock_info['change_plain'] = f"- {cv:,} (0.00%)"
+            stock_info['change_str'] = f"<span style='color:#94a3b8; font-weight:700;'>- {cv:,} (0.00%)</span>"
 
         stock_info['ipo_drop'] = f"{((nv - ipo_price) / ipo_price) * 100:.1f}%"
         stock_info['peak_drop'] = f"{((nv - peak_price) / peak_price) * 100:.1f}%"
@@ -397,7 +466,7 @@ def get_stock_and_disclosures(ticker_code="475560"):
     stock_info['disclosures'] = disclosures
     return stock_info
 
-# --- 4. 📺 유튜브 V17 수집 엔진 ---
+# --- 4. 📺 유튜브 V18 수집 엔진 ---
 YOUTUBE_CHANNELS = [
     {
         "name": "김재환의 오재나", "group": "CRITIC",
@@ -874,7 +943,7 @@ def fetch_youtube_hot_search():
         pass
     return deduplicate_and_sort_videos(videos, max_count=8, reject_older_than_months=3)
 
-# --- 5. HTML 대시보드 생성 ---
+# --- 5. HTML 대시보드 생성 (V18 세련된 트레이딩 터미널 스타일) ---
 def generate_html_string():
     with ThreadPoolExecutor(max_workers=10) as executor:
         f_dc = executor.submit(get_dc_best_posts_with_page2)
@@ -890,11 +959,11 @@ def generate_html_string():
         yt_hot_search = f_yt_search.result()
 
     kst = timezone(timedelta(hours=9))
-    current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H:%M:%S")
+    current_time = datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
     all_titles_for_radar = (
         [p['title'] for p in dc_posts if p.get('no') != 'ERR'] +
-        [n['title'].rsplit(' - ', 1)[0] for n in news if '실패' not in n['title']]
+        [n['pure_title'] for n in news if '실패' not in n['title']]
     )
 
     dc_html = ""
@@ -905,35 +974,47 @@ def generate_html_string():
         <li class="dc-item" data-no="{p_no}" data-rank="{idx}" data-title="{safe_title}" data-up="{p['upvotes']}" data-views="{p['views']}" data-date="{p['date']}" data-link="{p['link']}">
             <div class="meta-line" style="justify-content:space-between;">
                 <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                    <span class="dc-new-badge" style="display:none;">🆕 NEW</span>
-                    <span>{p['date']} | 조회 {p['views']} | <span style="color:#ff5252; font-weight:bold;">추천 {p['upvotes']}</span></span>
-                    <span class="dc-diff-badge" style="color:#00e676; font-size:0.85em; font-weight:bold;"></span>
+                    <span class="dc-new-badge" style="display:none;">NEW</span>
+                    <span>{p['date']} · 조회 {p['views']} · <b style="color:#fb7185;">추천 {p['upvotes']}</b></span>
+                    <span class="dc-diff-badge" style="color:#34d399; font-weight:700;"></span>
                 </div>
-                <button class="dc-mini-btn" title="이 게시글을 천안문·박제 목록에 수동 보관" onclick="manualArchiveDcPost('{p_no}')">+박제보관</button>
+                <button class="dc-mini-btn" title="이 게시글을 천안문·박제 목록에 수동 보관" onclick="manualArchiveDcPost('{p_no}')">+박제</button>
             </div>
-            <a href="{p['link']}" target="_blank">{p['title']} <span style="color:#4fc3f7; font-weight:bold;">{p['comments']}</span></a>
+            <a class="post-title" href="{p['link']}" target="_blank">{p['title']} <span class="comment-cnt">{p['comments']}</span></a>
         </li>
         """
 
     news_html = ""
     for idx, n in enumerate(news):
         badge_class = "badge-risk" if n['cat_code'] == 'RISK' else ("badge-pr" if n['cat_code'] == 'PR' else "badge-gen")
+        item_accent = "accent-risk" if n['cat_code'] == 'RISK' else ("accent-pr" if n['cat_code'] == 'PR' else "accent-gen")
         dup_cnt = len(n.get('dups', []))
         dup_html = ""
         if dup_cnt > 0:
-            dup_links = ", ".join([f"<a href='{d['link']}' target='_blank' style='color:#ffd54f; font-size:0.85em;'>{d['press']}</a>" for d in n['dups'][:8]])
-            dup_html = f"<div class='dup-box' style='margin-top:5px; padding:6px 10px; background:#12141a; border-left:3px solid #ffd54f; font-size:0.82em; color:#aaa;'>📢 동일 보도자료 복붙 언론사 ({dup_cnt}곳): {dup_links}</div>"
+            dup_pills = "".join([
+                f"<a class='dup-pill' href='{d['link']}' target='_blank' title='{d['pure_title'].replace(chr(39), '')}'>{d['press']}</a>"
+                for d in n['dups'][:10]
+            ])
+            dup_html = f"""
+            <details class="dup-details">
+                <summary>📢 유사·복붙 보도 <b>{dup_cnt}곳</b> <span style="color:#64748b; font-weight:normal;">(클릭해 언론사별 제목 확인)</span></summary>
+                <div class="dup-pill-wrap">{dup_pills}</div>
+            </details>
+            """
         
         safe_raw = n.get('pure_title', n['title']).replace('"', '&quot;')
         news_key = re.sub(r'\W+', '', n['title'])[:16]
+        press_name = n.get('press', '언론')
         news_html += f"""
-        <li class="news-item" data-idx="{idx}" data-key="{news_key}" data-cat="{n['cat_code']}" data-dups="{dup_cnt}" data-raw="{safe_raw}">
-            <div class="meta-line">
-                <span class="n-badge {badge_class}" title="클릭 시 [리스크 ➔ 언플 ➔ 일반 ➔ 자동판독 복구] 순환 및 자가학습" style="cursor:pointer;" onclick="cycleNewsManualCat(this)">{n['cat_label']}</span>
-                <button class="manual-reset-btn" style="display:none; background:#2b3242; color:#4fc3f7; border:1px solid #4fc3f7; border-radius:4px; font-size:0.7em; padding:1px 6px; cursor:pointer;" onclick="restoreAutoNewsCat(this)">↺ 자동복구</button>
-                <span>{n['date']}</span>
+        <li class="news-item {item_accent}" data-idx="{idx}" data-key="{news_key}" data-cat="{n['cat_code']}" data-dups="{dup_cnt}" data-raw="{safe_raw}">
+            <div class="meta-line" style="justify-content:space-between;">
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                    <span class="n-badge {badge_class}" title="클릭 시 [리스크 ➔ 언플 ➔ 일반 ➔ 자동판독 복구] 순환 및 자가학습" style="cursor:pointer;" onclick="cycleNewsManualCat(this)">{n['cat_label']}</span>
+                    <button class="manual-reset-btn" style="display:none;" onclick="restoreAutoNewsCat(this)">↺ 복구</button>
+                </div>
+                <span class="press-date"><b class="press-tag">{press_name}</b> · {n['date']}</span>
             </div>
-            <a href="{n['link']}" target="_blank">▶ {n['title']}</a>
+            <a class="news-title" href="{n['link']}" target="_blank">{n['title']}</a>
             {dup_html}
         </li>
         """
@@ -943,31 +1024,34 @@ def generate_html_string():
         for d in stock['disclosures']:
             disc_html += f"""
             <li>
-                <div class="meta-line">{d['date']} | {d['info']}</div>
-                <a href="{d['link']}" target="_blank">📑 {d['title']}</a>
+                <div class="meta-line">{d['date']} · <b style="color:#94a3b8;">{d['info']}</b></div>
+                <a class="post-title" href="{d['link']}" target="_blank">📑 {d['title']}</a>
             </li>
             """
     else:
-        disc_html = "<li><a href='https://dart.fss.or.kr/' target='_blank' style='color:#888;'>최근 신규 공시 없음 (DART 바로가기 ↗)</a></li>"
+        disc_html = "<li><a href='https://dart.fss.or.kr/' target='_blank' style='color:#64748b; font-size:0.88em;'>최근 신규 공시 없음 (DART 바로가기 ↗)</a></li>"
 
     yt_critic_html = ""
     yt_official_html = ""
     for ch in youtube_data:
-        mode_label = "롱폼+쇼츠 최신 4선" if ch.get('mode') == 'ALL_LATEST' else "롱폼 최신 4선"
-        status_badge = f"<span style='font-size:0.72em; color:#00e676; margin-left:6px;'>🟢 LIVE ({mode_label})</span>" if ch.get('is_live') else f"<span style='font-size:0.72em; color:#8b949e; margin-left:6px;'>⚪ 스냅샷 ({mode_label})</span>"
-        block = f"<div class='channel-name'><a href='{ch['handle']}' target='_blank'>[{ch['name']}] ↗</a>{status_badge}</div>"
+        mode_label = "롱폼+쇼츠 4선" if ch.get('mode') == 'ALL_LATEST' else "롱폼 4선"
+        status_badge = f"<span class='live-dot'>● LIVE · {mode_label}</span>" if ch.get('is_live') else f"<span class='snap-dot'>○ 스냅샷 · {mode_label}</span>"
+        block = f"<div class='channel-header'><a href='{ch['handle']}' target='_blank'>{ch['name']} ↗</a>{status_badge}</div>"
         for v in ch['videos']:
             vid_code = v.get('vid') or v['link'].split('v=')[-1].split('/')[-1]
             safe_vtitle = v['title'].replace("'", "").replace('"', '')
+            is_short_tag = "[Shorts]" in v['title']
+            clean_vtitle = v['title'].replace("[Shorts]", "").strip()
+            short_badge = "<span class='short-pill'>SHORTS</span>" if is_short_tag else ""
             block += f"""
             <div class="yt-item">
-                <div style="position:relative; cursor:pointer;" onclick="playInlineVideo('{vid_code}', '{safe_vtitle}')" title="클릭하여 대시보드 내 미니 플레이어로 재생">
+                <div class="yt-thumb-wrap" onclick="playInlineVideo('{vid_code}', '{safe_vtitle}')" title="클릭하여 대시보드 내 미니 플레이어로 재생">
                     <img src="{v['thumb']}" alt="thumb" onerror="this.style.display='none'">
-                    <span style="position:absolute; bottom:4px; right:4px; background:rgba(0,0,0,0.8); color:#fff; font-size:0.68em; padding:2px 5px; border-radius:4px;">▶ 바로재생</span>
+                    <div class="yt-play-overlay">▶</div>
                 </div>
                 <div class="yt-info">
-                    <a href="{v['link']}" target="_blank">{v['title']}</a>
-                    <div class="yt-meta">{v['date']} | 조회수 {v['views']}</div>
+                    <a href="{v['link']}" target="_blank">{short_badge}{clean_vtitle}</a>
+                    <div class="yt-meta">{v['date']} · 조회수 <b>{v['views']}</b></div>
                 </div>
             </div>
             """
@@ -983,18 +1067,18 @@ def generate_html_string():
             safe_vtitle = v['title'].replace("'", "").replace('"', '')
             yt_search_html += f"""
             <div class="yt-item">
-                <div style="position:relative; cursor:pointer;" onclick="playInlineVideo('{vid_code}', '{safe_vtitle}')" title="클릭하여 대시보드 내 미니 플레이어로 재생">
+                <div class="yt-thumb-wrap" onclick="playInlineVideo('{vid_code}', '{safe_vtitle}')" title="클릭하여 대시보드 내 미니 플레이어로 재생">
                     <img src="{v['thumb']}" alt="thumb" onerror="this.style.display='none'">
-                    <span style="position:absolute; bottom:4px; right:4px; background:rgba(0,0,0,0.8); color:#fff; font-size:0.68em; padding:2px 5px; border-radius:4px;">▶ 바로재생</span>
+                    <div class="yt-play-overlay">▶</div>
                 </div>
                 <div class="yt-info">
                     <a href="{v['link']}" target="_blank">{v['title']}</a>
-                    <div class="yt-meta"><span style="color:#ffd54f;">[{v['channel']}]</span> {v['date']} | 조회수 {v['views']}</div>
+                    <div class="yt-meta"><span style="color:#fbbf24; font-weight:600;">{v['channel']}</span> · {v['date']} · {v['views']}</div>
                 </div>
             </div>
             """
     else:
-        yt_search_html = "<div style='color:#888; font-size:0.9em;'>실시간 검색 결과를 불러올 수 없습니다.</div>"
+        yt_search_html = "<div style='color:#64748b; font-size:0.9em; padding:12px 0;'>실시간 검색 결과를 불러올 수 없습니다.</div>"
 
     seed_deleted_candidates = [
         {"no": "848625", "title": "애미창녀자식 종원이 '필독'", "up": "222", "views": "2616", "date": "11.16", "link": "https://gall.dcinside.com/board/view/?id=bjwstreet&no=848625", "confirmed": False, "detectedAt": "이전세션"},
@@ -1018,148 +1102,352 @@ def generate_html_string():
     <title>더본코리아 빽모니터링 PRO</title>
     <style>
         :root {{
-            --bg-main: #0f1115;
-            --bg-card: #181b22;
-            --border-color: #2a2f3a;
-            --accent-red: #ff5252;
-            --accent-blue: #4fc3f7;
-            --accent-gold: #ffd54f;
-            --text-main: #e4e6eb;
-            --text-muted: #8b949e;
+            --bg-canvas: #0b0e14;
+            --bg-card: #131720;
+            --bg-elevated: #1a202c;
+            --border-subtle: #222938;
+            --border-strong: #323c52;
+            --accent-red: #f43f5e;
+            --accent-blue: #38bdf8;
+            --accent-gold: #fbbf24;
+            --accent-green: #10b981;
+            --text-main: #f1f5f9;
+            --text-sub: #cbd5e1;
+            --text-muted: #64748b;
         }}
         * {{ box-sizing: border-box; }}
-        body {{ background-color: var(--bg-main); color: var(--text-main); font-family: 'Pretendard', 'Malgun Gothic', sans-serif; margin: 0; padding: 20px; }}
-        
-        .header-container {{ text-align: center; border-bottom: 1px solid var(--border-color); padding-bottom: 20px; margin-bottom: 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; }}
-        .logo-wrapper {{ display: flex; gap: 20px; justify-content: center; align-items: center; background: #fff; padding: 8px 22px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }}
-        .logo-wrapper img {{ height: 40px; object-fit: contain; }}
-        h1 {{ color: var(--accent-red); margin: 0; font-size: 1.9em; letter-spacing: -0.5px; }}
-        .update-bar {{ display: flex; align-items: center; gap: 12px; font-size: 0.88em; color: var(--text-muted); flex-wrap: wrap; justify-content: center; }}
+        body {{
+            background-color: var(--bg-canvas);
+            color: var(--text-main);
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Malgun Gothic', sans-serif;
+            margin: 0;
+            padding: 0 0 36px 0;
+            font-variant-numeric: tabular-nums;
+            line-height: 1.5;
+        }}
 
-        .radar-wrapper {{ max-width: 1700px; margin: 0 auto 20px auto; }}
-        .radar-bar {{ background: #14171f; border: 1px solid var(--border-color); border-radius: 10px; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }}
-        .radar-left {{ display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 1; }}
-        .radar-title {{ color: var(--accent-gold); font-weight: bold; font-size: 0.95em; margin-right: 4px; }}
-        .kw-badge {{ background: #232834; color: #d0d7de; padding: 5px 11px; border-radius: 20px; font-size: 0.85em; border: 1px solid #343b4a; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; transition: 0.15s; }}
-        .kw-badge:hover {{ border-color: var(--accent-blue); background: #2b3242; }}
-        .kw-badge.active-filter {{ background: rgba(79, 195, 247, 0.25) !important; border-color: var(--accent-blue) !important; color: #fff; font-weight: bold; }}
-        .kw-badge.boosted {{ border-color: rgba(255, 213, 79, 0.5); background: rgba(255, 213, 79, 0.08); }}
-        .kw-badge b {{ color: var(--accent-red); }}
-        .kw-ban-x {{ color: #768390; cursor: pointer; font-size: 0.9em; margin-left: 3px; padding: 0 3px; }}
-        .kw-ban-x:hover {{ color: #ff5252; font-weight: bold; }}
+        /* 상단 고정 커맨드 바 */
+        .topbar {{
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(11, 14, 20, 0.88);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 10px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }}
+        .topbar-left {{ display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }}
+        .brand-title {{ display: flex; align-items: center; gap: 10px; }}
+        .brand-logos {{ display: flex; align-items: center; gap: 8px; background: #fff; padding: 4px 10px; border-radius: 7px; }}
+        .brand-logos img {{ height: 22px; object-fit: contain; }}
+        h1 {{ margin: 0; font-size: 1.25em; font-weight: 800; letter-spacing: -0.5px; color: #fff; }}
+        h1 span {{ color: var(--accent-red); }}
+        .live-ticker-pill {{
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-strong);
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-size: 0.85em;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .topbar-right {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.82em; color: var(--text-muted); }}
 
-        .container {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1700px; margin: 0 auto; }}
-        @media (max-width: 1200px) {{ .container {{ grid-template-columns: 1fr 1fr; }} }}
-        @media (max-width: 768px) {{ .container {{ grid-template-columns: 1fr; }} }}
+        .page-wrap {{ max-width: 1760px; margin: 16px auto 0 auto; padding: 0 20px; }}
 
-        .card {{ background: var(--bg-card); padding: 22px; border-radius: 12px; border: 1px solid var(--border-color); box-shadow: 0 6px 16px rgba(0,0,0,0.4); display: flex; flex-direction: column; }}
-        h2 {{ color: var(--accent-blue); font-size: 1.2em; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin: 0 0 15px 0; display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; }}
-        a {{ color: var(--text-main); text-decoration: none; transition: 0.15s; line-height: 1.45; display: inline-block; }}
-        a:hover {{ color: var(--accent-red); text-decoration: underline; }}
+        /* 이슈 레이더 바 */
+        .radar-bar {{
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 10px 16px;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+        }}
+        .radar-left {{ display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: 1; }}
+        .radar-title {{ color: var(--accent-gold); font-weight: 700; font-size: 0.85em; margin-right: 4px; }}
+        .kw-badge {{
+            background: #1b2230;
+            color: var(--text-sub);
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.8em;
+            border: 1px solid var(--border-subtle);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }}
+        .kw-badge:hover {{ border-color: var(--accent-blue); background: #222c3f; color: #fff; }}
+        .kw-badge.active-filter {{ background: rgba(56, 189, 248, 0.2) !important; border-color: var(--accent-blue) !important; color: #fff; font-weight: 700; }}
+        .kw-badge.boosted {{ border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.06); }}
+        .kw-badge b {{ color: var(--accent-red); font-weight: 700; }}
+        .kw-ban-x {{ color: #64748b; font-size: 0.95em; margin-left: 2px; padding: 0 2px; }}
+        .kw-ban-x:hover {{ color: var(--accent-red); }}
 
-        .stock-top {{ display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 10px; }}
-        .stock-price {{ font-size: 2.8em; color: #fff; font-weight: 800; margin: 0; }}
-        .kpi-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 15px 0; }}
-        .kpi-box {{ background: #12141a; border: 1px solid #262b36; padding: 10px; border-radius: 8px; text-align: center; }}
-        .kpi-label {{ font-size: 0.75em; color: var(--text-muted); margin-bottom: 4px; }}
-        .kpi-val {{ font-size: 0.95em; font-weight: bold; color: #ff8a80; }}
+        /* 메인 3열 그리드 */
+        .container {{ display: grid; grid-template-columns: 1.05fr 1.25fr 1.05fr; gap: 18px; }}
+        @media (max-width: 1300px) {{ .container {{ grid-template-columns: 1fr 1fr; }} }}
+        @media (max-width: 820px) {{ .container {{ grid-template-columns: 1fr; }} }}
 
-        .gauge-wrap {{ background: #12141a; padding: 10px 12px; border-radius: 8px; border: 1px solid #262b36; margin-bottom: 12px; }}
-        .gauge-header {{ display: flex; justify-content: space-between; font-size: 0.8em; color: var(--text-muted); margin-bottom: 6px; }}
-        .gauge-bar-bg {{ width: 100%; height: 8px; background: #2b303c; border-radius: 4px; overflow: hidden; display: flex; }}
-        .gauge-bar-fill {{ height: 100%; background: linear-gradient(90deg, #ff1744, #ff9100, #00e676); width: {stock['margin_safety']}%; }}
+        .card {{
+            background: var(--bg-card);
+            padding: 18px 20px;
+            border-radius: 14px;
+            border: 1px solid var(--border-subtle);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+            display: flex;
+            flex-direction: column;
+        }}
+        h2 {{
+            color: #fff;
+            font-size: 1.05em;
+            font-weight: 700;
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 10px;
+            margin: 0 0 14px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }}
+        a {{ color: var(--text-main); text-decoration: none; transition: color 0.15s; }}
+        a:hover {{ color: var(--accent-blue); }}
 
-        .tab-group {{ display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }}
-        .tab-btn {{ background: #232834; color: #aaa; border: 1px solid #343b4a; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.8em; font-weight: bold; }}
-        .tab-btn.active {{ background: var(--accent-blue); color: #000; border-color: var(--accent-blue); }}
+        /* 주가 지표 */
+        .stock-hero {{ display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }}
+        .stock-price {{ font-size: 2.35em; font-weight: 800; letter-spacing: -1px; color: #fff; }}
+        .kpi-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }}
+        .kpi-box {{ background: #0e121a; border: 1px solid var(--border-subtle); padding: 9px 10px; border-radius: 9px; text-align: center; }}
+        .kpi-label {{ font-size: 0.72em; color: var(--text-muted); margin-bottom: 3px; }}
+        .kpi-val {{ font-size: 0.92em; font-weight: 700; color: #fb7185; }}
 
-        .kw-mgr-btn {{ background: #262c3a; color: var(--accent-gold); border: 1px solid #3d4659; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.76em; font-weight: bold; flex-shrink: 0; }}
-        .kw-mgr-btn:hover {{ background: #323a4d; }}
-        .kw-manager-panel {{ display: none; background: #12151c; border: 1px solid #343b4a; border-radius: 8px; padding: 14px; margin-top: 10px; margin-bottom: 14px; }}
-        .kw-sec-title {{ font-size: 0.8em; font-weight: bold; margin: 10px 0 6px 0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }}
+        .gauge-wrap {{ background: #0e121a; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--border-subtle); margin-bottom: 12px; }}
+        .gauge-header {{ display: flex; justify-content: space-between; font-size: 0.76em; color: var(--text-muted); margin-bottom: 6px; gap: 6px; }}
+        .gauge-bar-bg {{ width: 100%; height: 7px; background: #1e293b; border-radius: 999px; overflow: hidden; display: flex; }}
+        .gauge-bar-fill {{ height: 100%; background: linear-gradient(90deg, #f43f5e, #f59e0b, #10b981); width: {stock['margin_safety']}%; }}
+
+        /* 세그먼트 탭 & 버튼 */
+        .tab-group {{ display: flex; gap: 5px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }}
+        .tab-btn {{
+            background: #1a2130;
+            color: #94a3b8;
+            border: 1px solid var(--border-subtle);
+            padding: 5px 11px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 0.78em;
+            font-weight: 600;
+            transition: all 0.15s;
+        }}
+        .tab-btn:hover {{ color: #fff; border-color: var(--border-strong); }}
+        .tab-btn.active {{ background: var(--accent-blue); color: #0b0e14; border-color: var(--accent-blue); font-weight: 700; }}
+
+        .kw-mgr-btn {{
+            background: #1a2130;
+            color: var(--accent-gold);
+            border: 1px solid var(--border-strong);
+            padding: 5px 10px;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 0.76em;
+            font-weight: 600;
+            transition: 0.15s;
+        }}
+        .kw-mgr-btn:hover {{ background: #242e42; }}
+        .kw-manager-panel {{
+            display: none;
+            background: #0e121a;
+            border: 1px solid var(--border-strong);
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+        }}
+        .kw-sec-title {{ font-size: 0.78em; font-weight: 700; margin: 10px 0 6px 0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }}
         .kw-sec-title:first-child {{ margin-top: 0; }}
         .kw-input-row {{ display: flex; gap: 6px; margin-bottom: 8px; }}
-        .kw-input {{ flex: 1; background: #1b1f29; border: 1px solid #343b4a; color: #fff; padding: 5px 9px; border-radius: 5px; font-size: 0.8em; }}
-        .kw-add-btn {{ background: #2d3546; color: #fff; border: 1px solid #455068; padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 0.78em; font-weight: bold; }}
-        .kw-add-btn:hover {{ opacity: 0.9; }}
-        .kw-tag-wrap {{ display: flex; flex-wrap: wrap; gap: 5px; max-height: 95px; overflow-y: auto; padding: 4px 0; }}
-        .kw-edit-tag {{ padding: 2px 7px; border-radius: 4px; font-size: 0.75em; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }}
+        .kw-input {{
+            flex: 1;
+            background: #161c28;
+            border: 1px solid var(--border-strong);
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 7px;
+            font-size: 0.8em;
+            outline: none;
+        }}
+        .kw-input:focus {{ border-color: var(--accent-blue); }}
+        .kw-add-btn {{
+            background: #253047;
+            color: #fff;
+            border: 1px solid #3b4b6b;
+            padding: 5px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.76em;
+            font-weight: 600;
+        }}
+        .kw-add-btn:hover {{ background: #31405e; }}
+        .kw-tag-wrap {{ display: flex; flex-wrap: wrap; gap: 5px; max-height: 90px; overflow-y: auto; padding: 2px 0; }}
+        .kw-edit-tag {{ padding: 2px 7px; border-radius: 5px; font-size: 0.74em; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }}
         .kw-edit-tag:hover {{ opacity: 0.8; text-decoration: line-through; }}
-        .kw-mgr-footer {{ display: flex; justify-content: space-between; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #2a2f3a; flex-wrap: wrap; }}
+        .kw-mgr-footer {{ display: flex; justify-content: space-between; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle); flex-wrap: wrap; }}
 
-        .chart-img {{ width: 100%; border-radius: 8px; filter: invert(0.9) hue-rotate(180deg); border: 1px solid #333; }}
+        .chart-img {{ width: 100%; border-radius: 9px; filter: invert(0.92) hue-rotate(180deg) contrast(1.05); border: 1px solid var(--border-subtle); }}
 
-        .scroll-list {{ list-style: none; padding: 0; margin: 0; max-height: 620px; overflow-y: auto; padding-right: 5px; }}
-        .scroll-list::-webkit-scrollbar {{ width: 6px; }}
-        .scroll-list::-webkit-scrollbar-thumb {{ background: #343b4a; border-radius: 3px; }}
-        .scroll-list li {{ padding: 11px 0; border-bottom: 1px solid #232730; }}
+        /* 리스트 공통 */
+        .scroll-list {{ list-style: none; padding: 0; margin: 0; max-height: 620px; overflow-y: auto; padding-right: 4px; }}
+        .scroll-list::-webkit-scrollbar {{ width: 5px; }}
+        .scroll-list::-webkit-scrollbar-thumb {{ background: #2c3548; border-radius: 99px; }}
+        .scroll-list li {{ padding: 10px 8px; border-bottom: 1px solid #1c2230; transition: background 0.12s; border-radius: 6px; }}
+        .scroll-list li:hover {{ background: rgba(255,255,255,0.025); }}
         .scroll-list li:last-child {{ border-bottom: none; }}
-        .meta-line {{ font-size: 0.8em; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
+        .meta-line {{ font-size: 0.76em; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
 
-        .n-badge {{ padding: 2px 6px; border-radius: 4px; font-size: 0.75em; font-weight: bold; }}
-        .badge-risk {{ background: rgba(255, 82, 82, 0.2); color: #ff5252; border: 1px solid rgba(255, 82, 82, 0.4); }}
-        .badge-pr {{ background: rgba(255, 213, 79, 0.15); color: #ffd54f; border: 1px solid rgba(255, 213, 79, 0.4); }}
-        .badge-gen {{ background: rgba(79, 195, 247, 0.15); color: #4fc3f7; border: 1px solid rgba(79, 195, 247, 0.3); }}
-        .dc-new-badge {{ background: #00e676; color: #000; padding: 1px 5px; border-radius: 4px; font-size: 0.72em; font-weight: 800; }}
-        .dc-mini-btn {{ background: #1e2430; color: #9ca3af; border: 1px solid #343b4a; border-radius: 4px; font-size: 0.72em; padding: 1px 6px; cursor: pointer; }}
-        .dc-mini-btn:hover {{ color: #fff; border-color: #4fc3f7; background: #262f40; }}
+        /* 뉴스 카드 전용 */
+        .news-item {{ border-left: 3px solid transparent; padding-left: 10px !important; margin-bottom: 4px; }}
+        .news-item.accent-risk {{ border-left-color: rgba(244, 63, 94, 0.65); }}
+        .news-item.accent-pr {{ border-left-color: rgba(251, 191, 36, 0.55); }}
+        .news-item.accent-gen {{ border-left-color: rgba(56, 189, 248, 0.45); }}
+        .news-title {{ font-size: 0.92em; font-weight: 600; color: var(--text-main); display: block; line-height: 1.4; }}
+        .press-tag {{ color: #94a3b8; font-weight: 600; }}
+        .press-date {{ font-size: 0.92em; color: var(--text-muted); }}
 
-        .channel-name {{ margin: 18px 0 10px 0; padding-bottom: 5px; border-bottom: 1px dashed #333; }}
-        .channel-name:first-child {{ margin-top: 0; }}
-        .channel-name a {{ color: #a5d6a7; font-weight: bold; font-size: 1.05em; }}
-        .yt-item {{ display: flex; gap: 12px; margin-bottom: 14px; align-items: flex-start; }}
-        .yt-item img {{ width: 130px; height: 74px; object-fit: cover; border-radius: 6px; flex-shrink: 0; border: 1px solid #333; display: block; }}
-        .yt-info a {{ font-size: 0.95em; font-weight: bold; margin-bottom: 5px; word-break: keep-all; }}
-        .yt-meta {{ font-size: 0.8em; color: var(--text-muted); }}
+        .n-badge {{ padding: 2px 7px; border-radius: 5px; font-size: 0.74em; font-weight: 700; }}
+        .badge-risk {{ background: rgba(244, 63, 94, 0.16); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.35); }}
+        .badge-pr {{ background: rgba(251, 191, 36, 0.12); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.35); }}
+        .badge-gen {{ background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }}
+        .manual-reset-btn {{ background: #1e293b; color: #38bdf8; border: 1px solid #38bdf8; border-radius: 4px; font-size: 0.72em; padding: 1px 6px; cursor: pointer; }}
 
-        .hub-btn {{ width: 100%; background: linear-gradient(135deg, #1e293b, #0f172a); color: #4fc3f7; border: 1px solid #334155; padding: 12px 14px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.92em; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; transition: 0.2s; }}
-        .hub-btn:hover {{ border-color: #4fc3f7; background: #1e293b; color: #fff; }}
+        .dup-details {{ margin-top: 6px; background: #0d1118; border: 1px solid #1e2636; border-radius: 6px; padding: 5px 9px; font-size: 0.78em; color: #94a3b8; }}
+        .dup-details summary {{ cursor: pointer; list-style: none; display: flex; align-items: center; gap: 5px; }}
+        .dup-details summary::-webkit-details-marker {{ display: none; }}
+        .dup-pill-wrap {{ display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; padding-top: 6px; border-top: 1px dashed #1e2636; }}
+        .dup-pill {{ background: #182030; color: #fbbf24; border: 1px solid #2b364d; padding: 2px 7px; border-radius: 4px; font-size: 0.88em; }}
+        .dup-pill:hover {{ background: #26324a; color: #fff; }}
 
-        .inline-player-box {{ display: none; background: #000; border: 1px solid #4fc3f7; border-radius: 8px; padding: 8px; margin-bottom: 12px; }}
-        .inline-player-header {{ display: flex; justify-content: space-between; align-items: center; font-size: 0.8em; color: #4fc3f7; margin-bottom: 6px; font-weight: bold; gap: 6px; }}
+        /* 유튜브 전용 */
+        .channel-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 16px 0 8px 0;
+            padding: 6px 10px;
+            background: #0e121a;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+        }}
+        .channel-header:first-child {{ margin-top: 0; }}
+        .channel-header a {{ color: #e2e8f0; font-weight: 700; font-size: 0.92em; }}
+        .live-dot {{ font-size: 0.72em; color: #10b981; font-weight: 600; }}
+        .snap-dot {{ font-size: 0.72em; color: #64748b; }}
+
+        .yt-item {{ display: flex; gap: 11px; margin-bottom: 11px; align-items: flex-start; padding: 4px; border-radius: 8px; transition: background 0.12s; }}
+        .yt-item:hover {{ background: rgba(255,255,255,0.03); }}
+        .yt-thumb-wrap {{ position: relative; width: 124px; height: 70px; flex-shrink: 0; cursor: pointer; border-radius: 7px; overflow: hidden; border: 1px solid var(--border-subtle); background: #000; }}
+        .yt-thumb-wrap img {{ width: 100%; height: 100%; object-fit: cover; display: block; }}
+        .yt-play-overlay {{
+            position: absolute; inset: 0; background: rgba(0,0,0,0.35); color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.1em; opacity: 0; transition: opacity 0.15s;
+        }}
+        .yt-thumb-wrap:hover .yt-play-overlay {{ opacity: 1; }}
+        .yt-info {{ flex: 1; min-width: 0; }}
+        .yt-info a {{ font-size: 0.88em; font-weight: 600; line-height: 1.38; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 4px; }}
+        .yt-meta {{ font-size: 0.75em; color: var(--text-muted); }}
+        .short-pill {{ background: #e11d48; color: #fff; font-size: 0.72em; font-weight: 800; padding: 1px 5px; border-radius: 4px; margin-right: 5px; vertical-align: middle; }}
+
+        .inline-player-box {{ display: none; background: #000; border: 1px solid var(--accent-blue); border-radius: 10px; padding: 8px; margin-bottom: 12px; }}
+        .inline-player-header {{ display: flex; justify-content: space-between; align-items: center; font-size: 0.78em; color: var(--accent-blue); margin-bottom: 6px; font-weight: 700; gap: 6px; }}
+
+        /* DC & 허브 */
+        .post-title {{ font-size: 0.9em; font-weight: 500; color: var(--text-main); line-height: 1.4; display: block; }}
+        .comment-cnt {{ color: var(--accent-blue); font-weight: 700; font-size: 0.9em; }}
+        .dc-new-badge {{ background: #10b981; color: #052e16; padding: 1px 5px; border-radius: 4px; font-size: 0.72em; font-weight: 800; }}
+        .dc-mini-btn {{ background: #182030; color: #94a3b8; border: 1px solid var(--border-subtle); border-radius: 5px; font-size: 0.72em; padding: 2px 7px; cursor: pointer; transition: 0.12s; }}
+        .dc-mini-btn:hover {{ color: #fff; border-color: var(--accent-blue); background: #222e45; }}
+
+        .hub-btn {{
+            width: 100%;
+            background: #161d2b;
+            color: var(--text-main);
+            border: 1px solid var(--border-subtle);
+            padding: 11px 14px;
+            border-radius: 9px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.86em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            transition: all 0.15s;
+        }}
+        .hub-btn:hover {{ border-color: var(--accent-blue); background: #1d273b; color: #fff; transform: translateY(-1px); }}
+        .dc-grid-2col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }}
+        @media (max-width: 900px) {{ .dc-grid-2col {{ grid-template-columns: 1fr; }} }}
     </style>
 </head>
 <body>
-    <div class="header-container">
-        <div class="logo-wrapper">
-            <img src="https://clogo.saramin.co.kr/company/logo/201904/01/pp9q4h_a2oy-2rxibo_logo.png" referrerpolicy="no-referrer" alt="더본코리아">
-            <img src="https://paikdabang.com/wp-content/themes/paikdabang/assets/images/logo.png" referrerpolicy="no-referrer" alt="빽다방">
-            <img src="https://start.theborn.co.kr/images/brand/hongkong/common/logo.png" referrerpolicy="no-referrer" alt="홍콩반점">
+    <!-- 상단 고정 커맨드 바 -->
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="brand-title">
+                <div class="brand-logos">
+                    <img src="https://clogo.saramin.co.kr/company/logo/201904/01/pp9q4h_a2oy-2rxibo_logo.png" referrerpolicy="no-referrer" alt="더본코리아">
+                    <img src="https://paikdabang.com/wp-content/themes/paikdabang/assets/images/logo.png" referrerpolicy="no-referrer" alt="빽다방">
+                    <img src="https://start.theborn.co.kr/images/brand/hongkong/common/logo.png" referrerpolicy="no-referrer" alt="홍콩반점">
+                </div>
+                <h1>더본코리아 <span>빽모니터링 PRO</span></h1>
+            </div>
+            <div class="live-ticker-pill">
+                <span style="color:#94a3b8;">475560</span>
+                <b style="color:#fff;">{stock['price']}원</b>
+                <span style="color:{stock['change_color']}; font-weight:700;">{stock['change_plain']}</span>
+            </div>
         </div>
-        <h1>더본코리아 빽모니터링 PRO</h1>
-        <div class="update-bar">
-            <span>마지막 업데이트: {current_time}</span>
-            <button class="kw-mgr-btn" onclick="location.reload()">🔄 즉시 새로고침</button>
-            <button id="autoRefreshBtn" class="kw-mgr-btn" style="color:#8b949e;" onclick="toggleAutoRefresh()">⏱️ 5분 자동갱신: OFF</button>
+        <div class="topbar-right">
+            <span>갱신: {current_time}</span>
+            <button class="kw-mgr-btn" style="color:#fff;" onclick="location.reload()">🔄 새로고침</button>
+            <button id="autoRefreshBtn" class="kw-mgr-btn" style="color:#94a3b8;" onclick="toggleAutoRefresh()">⏱️ 5분 자동갱신: OFF</button>
         </div>
-    </div>
+    </header>
 
-    <div class="radar-wrapper">
+    <div class="page-wrap">
+        <!-- 실시간 이슈 핵심 명사 레이더 -->
         <div class="radar-bar">
             <div class="radar-left">
-                <span class="radar-title">🔥 실시간 이슈 핵심 명사 (배지 클릭 시 뉴스+골갤 동시 필터 · × 클릭 시 제외):</span>
+                <span class="radar-title">🔥 실시간 이슈 레이더</span>
                 <span id="radarBadgesContainer" style="display:contents;"></span>
             </div>
             <div style="display:flex; gap:6px; align-items:center;">
-                <input type="text" id="quickSearchInput" class="kw-input" style="width:185px;" placeholder="🔍 뉴스+골갤 즉시 검색..." oninput="applyQuickSearch(this.value)">
-                <button id="clearSearchBtn" class="kw-add-btn" style="display:none; background:#ff5252; border:none;" onclick="applyQuickSearch('')">✕ 해제</button>
-                <button class="kw-mgr-btn" onclick="togglePanel('radarManagerPanel')">⚙️ 핵심명사 관리</button>
+                <input type="text" id="quickSearchInput" class="kw-input" style="width:190px;" placeholder="🔍 뉴스+골갤 동시 검색..." oninput="applyQuickSearch(this.value)">
+                <button id="clearSearchBtn" class="kw-add-btn" style="display:none; background:#e11d48; border:none;" onclick="applyQuickSearch('')">✕ 해제</button>
+                <button class="kw-mgr-btn" onclick="togglePanel('radarManagerPanel')">⚙️ 명사관리</button>
             </div>
         </div>
 
         <div id="radarManagerPanel" class="kw-manager-panel">
-            <div class="kw-sec-title" style="color:#ffd54f;">
-                <span>📌 우선 추출·보존 핵심 명사 (클릭 시 삭제)</span>
-            </div>
+            <div class="kw-sec-title" style="color:#fbbf24;"><span>📌 우선 추출·보존 핵심 명사 (클릭 시 삭제)</span></div>
             <div class="kw-input-row">
                 <input type="text" id="inputRadarBoost" class="kw-input" placeholder="우선 추출할 핵심 명사 입력" onkeydown="if(event.key==='Enter') addRadarKw('BOOST')">
                 <button class="kw-add-btn" onclick="addRadarKw('BOOST')">+ 추가</button>
             </div>
             <div id="tagsRadarBoost" class="kw-tag-wrap"></div>
 
-            <div class="kw-sec-title" style="color:#ff5252;">
-                <span>🚫 레이더 랭킹 제외 불용어 (클릭 시 복원)</span>
-            </div>
+            <div class="kw-sec-title" style="color:#fb7185;"><span>🚫 레이더 랭킹 제외 불용어 (클릭 시 복원)</span></div>
             <div class="kw-input-row">
                 <input type="text" id="inputRadarStop" class="kw-input" placeholder="랭킹에서 뺄 단어 입력" onkeydown="if(event.key==='Enter') addRadarKw('STOP')">
                 <button class="kw-add-btn" onclick="addRadarKw('STOP')">+ 제외 추가</button>
@@ -1167,237 +1455,228 @@ def generate_html_string():
             <div id="tagsRadarStop" class="kw-tag-wrap"></div>
 
             <div class="kw-mgr-footer">
-                <button class="kw-add-btn" style="background:#1f2937; color:#9ca3af;" onclick="resetRadarDefault()">↺ 명사 설정 초기화</button>
+                <button class="kw-add-btn" style="background:#1e293b; color:#94a3b8;" onclick="resetRadarDefault()">↺ 명사 설정 초기화</button>
                 <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="copyAllPythonConfig()">📋 전체 파이썬 설정 코드 복사</button>
             </div>
         </div>
-    </div>
 
-    <div class="container">
-        <!-- [상단 좌측] 1. 더본코리아 주가 & 오너리스크 지표 -->
-        <div class="card">
-            <h2>
-                <span>📉 더본코리아 주가 & 오너리스크 지표</span>
-                <span id="lastVisitStockDiff" style="font-size:0.75em; color:#ffd54f;"></span>
-            </h2>
-            <div class="stock-top">
-                <div class="stock-price" id="currentStockPrice" data-raw="{stock['raw_price']}">{stock['price']} 원</div>
-                <div style="font-size: 1.15em;">{stock['change_str']}</div>
-            </div>
+        <div class="container">
+            <!-- [1] 주가 & 오너리스크 지표 -->
+            <div class="card">
+                <h2>
+                    <span>📉 주가 & 오너리스크 지표</span>
+                    <span id="lastVisitStockDiff" style="font-size:0.75em; color:#fbbf24;"></span>
+                </h2>
+                <div class="stock-hero">
+                    <div class="stock-price" id="currentStockPrice" data-raw="{stock['raw_price']}">{stock['price']}<span style="font-size:0.45em; font-weight:600; color:#94a3b8; margin-left:4px;">원</span></div>
+                    <div style="font-size: 1.05em;">{stock['change_str']}</div>
+                </div>
 
-            <div class="kpi-grid">
-                <div class="kpi-box">
-                    <div class="kpi-label">공모가(34,000원) 대비</div>
-                    <div class="kpi-val">{stock['ipo_drop']}</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="kpi-label">최고가(64,500원) 대비</div>
-                    <div class="kpi-val">{stock['peak_drop']}</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="kpi-label">당일 거래량</div>
-                    <div class="kpi-val" style="color:#e0e0e0;">{stock['vol']}주</div>
-                </div>
-            </div>
-
-            <div class="gauge-wrap">
-                <div class="gauge-header">
-                    <span>⚠️ 50억 주담대 마진콜(~6,875원)</span>
-                    <span>현재 {stock['price']}원</span>
-                    <span>공모가(34,000원)</span>
-                </div>
-                <div class="gauge-bar-bg">
-                    <div class="gauge-bar-fill"></div>
-                </div>
-            </div>
-
-            <div class="tab-group">
-                <button class="tab-btn active" onclick="switchChart('{stock['chart_day']}', this)">실시간선</button>
-                <button class="tab-btn" onclick="switchChart('{stock['chart_c_day']}', this)">일봉</button>
-                <button class="tab-btn" onclick="switchChart('{stock['chart_c_week']}', this)">주봉</button>
-                <button class="tab-btn" onclick="switchChart('{stock['chart_c_month']}', this)">월봉</button>
-            </div>
-            <img id="stockChartImg" src="{stock['chart_day']}" referrerpolicy="no-referrer" class="chart-img" alt="주가 차트">
-
-            <h2 style="margin-top:22px; font-size:1.05em;">📑 최근 전자공시 (DART 연동)</h2>
-            <ul class="scroll-list" style="max-height: 190px;">
-                {disc_html}
-            </ul>
-        </div>
-
-        <!-- [상단 중앙] 2. 실시간 뉴스 판독기 -->
-        <div class="card">
-            <h2>
-                <span>📰 실시간 뉴스 판독기 (자가학습·물타기 분리)</span>
-                <button class="kw-mgr-btn" onclick="togglePanel('kwManagerPanel')">⚙️ 키워드·학습 관리</button>
-            </h2>
-
-            <div class="gauge-wrap" style="padding:8px 12px; margin-bottom:10px;">
-                <div class="gauge-header" style="margin-bottom:4px;">
-                    <span id="ratioRiskText" style="color:#ff5252; font-weight:bold;">🚨 리스크 0%</span>
-                    <span style="font-size:0.85em; color:#8b949e;">배지 클릭 시 수동전환+자동학습 (↺ 복구 가능)</span>
-                    <span id="ratioPrText" style="color:#ffd54f; font-weight:bold;">🎺 언플·물타기 0%</span>
-                </div>
-                <div class="gauge-bar-bg">
-                    <div id="newsRiskBar" style="height:100%; background:#ff5252; width:50%; transition:0.3s;"></div>
-                    <div id="newsPrBar" style="height:100%; background:#ffd54f; width:50%; transition:0.3s;"></div>
-                </div>
-            </div>
-
-            <div id="kwManagerPanel" class="kw-manager-panel" style="margin-top:0;">
-                <div class="kw-sec-title" style="color:#00e676;">
-                    <span>🧠 수동 분류 자가학습 메모리 (클릭 시 삭제)</span>
-                    <button class="kw-add-btn" style="font-size:0.72em; padding:2px 7px;" onclick="clearLearnedMemory()">학습 초기화</button>
-                </div>
-                <div id="tagsLearned" class="kw-tag-wrap" style="margin-bottom:8px;"></div>
-
-                <div class="kw-sec-title" style="color:#ff5252;">
-                    <span>🚨 쟁점·리스크 키워드 (클릭 시 삭제)</span>
-                </div>
-                <div class="kw-input-row">
-                    <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
-                    <button class="kw-add-btn" onclick="addNewsKw('RISK')">+ 추가</button>
-                </div>
-                <div id="tagsRisk" class="kw-tag-wrap"></div>
-
-                <div class="kw-sec-title" style="color:#ffd54f;">
-                    <span>🎺 자본언플·홍보 키워드 (클릭 시 삭제)</span>
-                </div>
-                <div class="kw-input-row">
-                    <input type="text" id="inputPrKw" class="kw-input" placeholder="언플 단어 입력" onkeydown="if(event.key==='Enter') addNewsKw('PR')">
-                    <button class="kw-add-btn" onclick="addNewsKw('PR')">+ 추가</button>
-                </div>
-                <div id="tagsPr" class="kw-tag-wrap"></div>
-
-                <div class="kw-sec-title" style="color:#9ea7b3;">
-                    <span>🚫 스팸·목록 제외 키워드 (포함 시 뉴스 숨김)</span>
-                </div>
-                <div class="kw-input-row">
-                    <input type="text" id="inputSpamKw" class="kw-input" placeholder="제외할 단어 입력" onkeydown="if(event.key==='Enter') addNewsKw('SPAM')">
-                    <button class="kw-add-btn" onclick="addNewsKw('SPAM')">+ 추가</button>
-                </div>
-                <div id="tagsSpam" class="kw-tag-wrap"></div>
-
-                <div class="kw-mgr-footer">
-                    <button class="kw-add-btn" style="background:#1f2937; color:#9ca3af;" onclick="resetNewsDefault()">↺ 뉴스 설정 전체 초기화</button>
-                    <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="copyAllPythonConfig()">📋 학습 단어 포함 파이썬 코드 복사</button>
-                </div>
-            </div>
-
-            <div class="tab-group" id="newsFilterTabs">
-                <button class="tab-btn active" data-filter="ALL" onclick="filterNews('ALL', this)">전체보기</button>
-                <button class="tab-btn" data-filter="RISK" onclick="filterNews('RISK', this)">🚨 쟁점·리스크</button>
-                <button class="tab-btn" data-filter="PR" onclick="filterNews('PR', this)">🎺 자본언플·복붙</button>
-                <button class="tab-btn" data-filter="GEN" onclick="filterNews('GEN', this)">📰 일반동향</button>
-            </div>
-            <ul class="scroll-list" id="newsList">
-                {news_html}
-            </ul>
-        </div>
-
-        <!-- [상단 우측] 3. 유튜브 트래픽 전쟁 -->
-        <div class="card">
-            <h2>📺 유튜브 트래픽 전쟁 (채널당 최신 4선)</h2>
-            <div class="tab-group">
-                <button class="tab-btn active" onclick="switchYtTab('CRITIC', this)">⚡ 비판 (오재나·탐코·실록)</button>
-                <button class="tab-btn" onclick="switchYtTab('SEARCH', this)">🔥 전체 유튜브 최신이슈</button>
-                <button class="tab-btn" onclick="switchYtTab('OFFICIAL', this)">🛡️ 백종원·더본 공식 (+미국채널)</button>
-            </div>
-
-            <div id="inlinePlayerBox" class="inline-player-box">
-                <div class="inline-player-header">
-                    <span id="inlinePlayerTitle" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">▶ 동영상 재생 중</span>
-                    <button id="popupPlayerBtn" class="kw-add-btn" style="background:#0284c7; border:none; padding:2px 8px;">🪟 팝업창 재생</button>
-                    <button class="kw-add-btn" style="background:#ff5252; border:none; padding:2px 8px;" onclick="closeInlineVideo()">✕ 닫기</button>
-                </div>
-                <div style="position:relative; padding-bottom:56.25%; height:0; overflow:hidden; border-radius:6px;">
-                    <iframe id="inlinePlayerFrame" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" style="position:absolute; top:0; left:0; width:100%; height:100%; border:0;" allowfullscreen></iframe>
-                </div>
-            </div>
-
-            <div id="ytCriticBox" class="scroll-list">
-                {yt_critic_html}
-            </div>
-            <div id="ytSearchBox" class="scroll-list" style="display:none;">
-                {yt_search_html}
-            </div>
-            <div id="ytOfficialBox" class="scroll-list" style="display:none;">
-                {yt_official_html}
-            </div>
-        </div>
-
-        <!-- [하단 좌측 - 주가 지표 바로 밑] 4. 시총 증발·펀더멘털 & 종토방 허브 -->
-        <div class="card">
-            <h2>📊 시총 증발·펀더멘털 & 종토방 허브</h2>
-            <div class="kpi-grid" style="grid-template-columns: 1fr 1fr; margin-top: 4px;">
-                <div class="kpi-box">
-                    <div class="kpi-label">현재 시가총액</div>
-                    <div class="kpi-val" style="color:#fff;">{stock['mcap_str']}</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="kpi-label">고점(9,508억) 대비 증발</div>
-                    <div class="kpi-val" style="color:#ff5252;">{stock['mcap_lost_str']}</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="kpi-label">주당순이익 (EPS)</div>
-                    <div class="kpi-val" style="color:#ff5252;">-441원 (적자전환)</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="kpi-label">52주 최저가(12,130원) 대비</div>
-                    <div class="kpi-val" style="color:#ffd54f;">{stock['from_52w_low']}</div>
-                </div>
-            </div>
-
-            <div class="gauge-wrap" style="margin-bottom: 16px;">
-                <div class="gauge-header">
-                    <span>👤 백종원 보유지분(59.65%) 평가액</span>
-                    <span style="color:#ffd54f; font-weight:bold;">{stock['paik_val_str']} (50억 주담대 설정)</span>
-                </div>
-            </div>
-
-            <h2 style="font-size:1.05em; margin-top:4px;">🤬 실시간 종토방 & 커뮤니티 원클릭 뷰어</h2>
-            <div style="font-size:0.8em; color:#8b949e; margin-bottom:10px;">
-                버튼 클릭 시 화면 우측에 스마트폰 크기의 실시간 전용 창이 나란히 열립니다.
-            </div>
-            <button class="hub-btn" onclick="openSidePopup('https://m.stock.naver.com/domestic/stock/475560/discussion', 'naver_jt')">
-                <span>🪟 네이버 Npay 종토방 & 주주오픈톡 미니창 열기</span>
-                <span>↗</span>
-            </button>
-            <button class="hub-btn" onclick="openSidePopup('https://www.fmkorea.com/search.php?mid=best&search_keyword=%EB%B0%B1%EC%A2%85%EC%9B%90&search_target=title_content', 'fmkorea_baek')">
-                <span>🪟 에펨코리아(펨코) '백종원' 포텐 검색창 열기</span>
-                <span>↗</span>
-            </button>
-            <button class="hub-btn" onclick="openSidePopup('https://gall.dcinside.com/board/lists/?id=bjwstreet', 'dc_all')">
-                <span>🪟 골목식당 갤러리 전체글 실시간 미니창 열기</span>
-                <span>↗</span>
-            </button>
-        </div>
-
-        <!-- [하단 중앙·우측 2칸] 5. 골목식당 갤러리 개념글 (1·2페이지 동시 대조 천안문 관리) -->
-        <div class="card" style="grid-column: span 2;">
-            <h2>
-                <span id="dcHeaderTitle">🦅 골목식당 갤러리 개념글 (실시간 파묘 50선)</span>
-                <div style="display:flex; gap:6px; align-items:center;">
-                    <span id="dcNewCountBadge" style="font-size:0.75em; color:#00e676;"></span>
-                    <button id="btnShowDeleted" class="kw-mgr-btn" style="color:#ff5252; border-color:#ff5252;" onclick="togglePanel('dcDeletedPanel')">🚨 천안문·삭제 관리 (0)</button>
-                </div>
-            </h2>
-
-            <div id="dcDeletedPanel" class="kw-manager-panel" style="display:block; margin-top:0; border-color:#ff5252;">
-                <div class="kw-sec-title" style="color:#ff5252;">
-                    <span>🚨 천안문·삭제 개별 관리함 (1·2페이지 동시 대조 완료 · [🔍 원문확인] 후 [📌 박제확정] 또는 [✕ 제외] 선택)</span>
-                    <div style="display:flex; gap:5px; flex-wrap:wrap;">
-                        <button class="kw-add-btn" style="font-size:0.72em; padding:3px 8px; background:#0284c7; border-color:#0369a1;" onclick="pruneAliveFromDeletedLog()">🧹 1·2페이지 생존글 자동정리</button>
-                        <button class="kw-add-btn" style="font-size:0.72em; padding:3px 8px; background:#374151;" onclick="clearUnconfirmedDeleted()">🧹 미확정만 비우기</button>
-                        <button class="kw-add-btn" style="font-size:0.72em; padding:3px 8px; background:#7f1d1d; border-color:#991b1b;" onclick="clearDeletedHistory()">🗑️ 전체 초기화</button>
+                <div class="kpi-grid">
+                    <div class="kpi-box">
+                        <div class="kpi-label">공모가(34,000) 대비</div>
+                        <div class="kpi-val">{stock['ipo_drop']}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="kpi-label">최고가(64,500) 대비</div>
+                        <div class="kpi-val">{stock['peak_drop']}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="kpi-label">당일 거래량</div>
+                        <div class="kpi-val" style="color:#e2e8f0;">{stock['vol']}주</div>
                     </div>
                 </div>
-                <ul id="dcDeletedList" class="scroll-list" style="max-height:240px; font-size:0.88em;"></ul>
+
+                <div class="gauge-wrap">
+                    <div class="gauge-header">
+                        <span style="color:#fb7185; font-weight:600;">⚠️ 주담대 마진콜(~6,875)</span>
+                        <span style="color:#fff; font-weight:600;">{stock['price']}원</span>
+                        <span>공모가(34,000)</span>
+                    </div>
+                    <div class="gauge-bar-bg">
+                        <div class="gauge-bar-fill"></div>
+                    </div>
+                </div>
+
+                <div class="tab-group">
+                    <button class="tab-btn active" onclick="switchChart('{stock['chart_day']}', this)">실시간선</button>
+                    <button class="tab-btn" onclick="switchChart('{stock['chart_c_day']}', this)">일봉</button>
+                    <button class="tab-btn" onclick="switchChart('{stock['chart_c_week']}', this)">주봉</button>
+                    <button class="tab-btn" onclick="switchChart('{stock['chart_c_month']}', this)">월봉</button>
+                </div>
+                <img id="stockChartImg" src="{stock['chart_day']}" referrerpolicy="no-referrer" class="chart-img" alt="주가 차트">
+
+                <h2 style="margin-top:20px; font-size:0.95em;">📑 최근 전자공시 (DART)</h2>
+                <ul class="scroll-list" style="max-height: 170px;">
+                    {disc_html}
+                </ul>
             </div>
 
-            <ul id="dcPostList" class="scroll-list" style="max-height: 600px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px;">
-                {dc_html}
-            </ul>
+            <!-- [2] 실시간 뉴스 판독기 -->
+            <div class="card">
+                <h2>
+                    <span>📰 실시간 뉴스 판독기 (정밀 중복제거)</span>
+                    <button class="kw-mgr-btn" onclick="togglePanel('kwManagerPanel')">⚙️ 키워드·학습</button>
+                </h2>
+
+                <div class="gauge-wrap" style="padding:8px 12px; margin-bottom:10px;">
+                    <div class="gauge-header" style="margin-bottom:5px;">
+                        <span id="ratioRiskText" style="color:#fb7185; font-weight:700;">🚨 리스크 0%</span>
+                        <span style="font-size:0.9em;">배지 클릭 시 수동전환+자동학습</span>
+                        <span id="ratioPrText" style="color:#fbbf24; font-weight:700;">🎺 언플·물타기 0%</span>
+                    </div>
+                    <div class="gauge-bar-bg">
+                        <div id="newsRiskBar" style="height:100%; background:#f43f5e; width:50%; transition:0.3s;"></div>
+                        <div id="newsPrBar" style="height:100%; background:#fbbf24; width:50%; transition:0.3s;"></div>
+                    </div>
+                </div>
+
+                <div id="kwManagerPanel" class="kw-manager-panel">
+                    <div class="kw-sec-title" style="color:#34d399;">
+                        <span>🧠 수동 분류 자가학습 메모리 (클릭 시 삭제)</span>
+                        <button class="kw-add-btn" style="font-size:0.72em; padding:2px 7px;" onclick="clearLearnedMemory()">학습 초기화</button>
+                    </div>
+                    <div id="tagsLearned" class="kw-tag-wrap" style="margin-bottom:8px;"></div>
+
+                    <div class="kw-sec-title" style="color:#fb7185;"><span>🚨 쟁점·리스크 키워드</span></div>
+                    <div class="kw-input-row">
+                        <input type="text" id="inputRiskKw" class="kw-input" placeholder="리스크 단어 입력" onkeydown="if(event.key==='Enter') addNewsKw('RISK')">
+                        <button class="kw-add-btn" onclick="addNewsKw('RISK')">+ 추가</button>
+                    </div>
+                    <div id="tagsRisk" class="kw-tag-wrap"></div>
+
+                    <div class="kw-sec-title" style="color:#fbbf24;"><span>🎺 자본언플·홍보 키워드</span></div>
+                    <div class="kw-input-row">
+                        <input type="text" id="inputPrKw" class="kw-input" placeholder="언플 단어 입력" onkeydown="if(event.key==='Enter') addNewsKw('PR')">
+                        <button class="kw-add-btn" onclick="addNewsKw('PR')">+ 추가</button>
+                    </div>
+                    <div id="tagsPr" class="kw-tag-wrap"></div>
+
+                    <div class="kw-sec-title" style="color:#94a3b8;"><span>🚫 스팸·목록 제외 키워드</span></div>
+                    <div class="kw-input-row">
+                        <input type="text" id="inputSpamKw" class="kw-input" placeholder="제외할 단어 입력" onkeydown="if(event.key==='Enter') addNewsKw('SPAM')">
+                        <button class="kw-add-btn" onclick="addNewsKw('SPAM')">+ 추가</button>
+                    </div>
+                    <div id="tagsSpam" class="kw-tag-wrap"></div>
+
+                    <div class="kw-mgr-footer">
+                        <button class="kw-add-btn" style="background:#1e293b; color:#94a3b8;" onclick="resetNewsDefault()">↺ 전체 초기화</button>
+                        <button class="kw-add-btn" style="background:#0284c7; border-color:#0369a1;" onclick="copyAllPythonConfig()">📋 파이썬 설정 복사</button>
+                    </div>
+                </div>
+
+                <div class="tab-group" id="newsFilterTabs">
+                    <button class="tab-btn active" data-filter="ALL" onclick="filterNews('ALL', this)">전체</button>
+                    <button class="tab-btn" data-filter="RISK" onclick="filterNews('RISK', this)">🚨 리스크</button>
+                    <button class="tab-btn" data-filter="PR" onclick="filterNews('PR', this)">🎺 언플·복붙</button>
+                    <button class="tab-btn" data-filter="GEN" onclick="filterNews('GEN', this)">📰 일반</button>
+                </div>
+                <ul class="scroll-list" id="newsList">
+                    {news_html}
+                </ul>
+            </div>
+
+            <!-- [3] 유튜브 트래픽 전쟁 -->
+            <div class="card">
+                <h2>📺 유튜브 트래픽 전쟁 (최신 4선)</h2>
+                <div class="tab-group">
+                    <button class="tab-btn active" onclick="switchYtTab('CRITIC', this)">⚡ 비판 (오재나·탐코·실록)</button>
+                    <button class="tab-btn" onclick="switchYtTab('SEARCH', this)">🔥 전체 최신</button>
+                    <button class="tab-btn" onclick="switchYtTab('OFFICIAL', this)">🛡️ 공식 (+미국)</button>
+                </div>
+
+                <div id="inlinePlayerBox" class="inline-player-box">
+                    <div class="inline-player-header">
+                        <span id="inlinePlayerTitle" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">▶ 동영상 재생 중</span>
+                        <button id="popupPlayerBtn" class="kw-add-btn" style="background:#0284c7; border:none; padding:2px 8px;">🪟 팝업</button>
+                        <button class="kw-add-btn" style="background:#e11d48; border:none; padding:2px 8px;" onclick="closeInlineVideo()">✕ 닫기</button>
+                    </div>
+                    <div style="position:relative; padding-bottom:56.25%; height:0; overflow:hidden; border-radius:6px;">
+                        <iframe id="inlinePlayerFrame" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" style="position:absolute; top:0; left:0; width:100%; height:100%; border:0;" allowfullscreen></iframe>
+                    </div>
+                </div>
+
+                <div id="ytCriticBox" class="scroll-list">
+                    {yt_critic_html}
+                </div>
+                <div id="ytSearchBox" class="scroll-list" style="display:none;">
+                    {yt_search_html}
+                </div>
+                <div id="ytOfficialBox" class="scroll-list" style="display:none;">
+                    {yt_official_html}
+                </div>
+            </div>
+
+            <!-- [4] 시총 증발·펀더멘털 & 종토방 허브 -->
+            <div class="card">
+                <h2>📊 시총 증발 & 커뮤니티 허브</h2>
+                <div class="kpi-grid" style="grid-template-columns: 1fr 1fr;">
+                    <div class="kpi-box">
+                        <div class="kpi-label">현재 시가총액</div>
+                        <div class="kpi-val" style="color:#fff;">{stock['mcap_str']}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="kpi-label">고점(9,508억) 대비 증발</div>
+                        <div class="kpi-val">{stock['mcap_lost_str']}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="kpi-label">주당순이익 (EPS)</div>
+                        <div class="kpi-val">-441원 (적자)</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="kpi-label">52주 최저(12,130) 대비</div>
+                        <div class="kpi-val" style="color:#fbbf24;">{stock['from_52w_low']}</div>
+                    </div>
+                </div>
+
+                <div class="gauge-wrap" style="margin-bottom: 16px;">
+                    <div class="gauge-header" style="margin-bottom:0;">
+                        <span>👤 백종원 지분(59.65%) 평가액</span>
+                        <span style="color:#fbbf24; font-weight:700;">{stock['paik_val_str']} (주담대 50억)</span>
+                    </div>
+                </div>
+
+                <h2 style="font-size:0.95em;">🤬 실시간 커뮤니티 미니 뷰어</h2>
+                <button class="hub-btn" onclick="openSidePopup('https://m.stock.naver.com/domestic/stock/475560/discussion', 'naver_jt')">
+                    <span>🪟 네이버 Npay 종토방 & 주주오픈톡</span>
+                    <span style="color:#38bdf8;">↗</span>
+                </button>
+                <button class="hub-btn" onclick="openSidePopup('https://www.fmkorea.com/search.php?mid=best&search_keyword=%EB%B0%B1%EC%A2%85%EC%9B%90&search_target=title_content', 'fmkorea_baek')">
+                    <span>🪟 에펨코리아 '백종원' 포텐 검색</span>
+                    <span style="color:#38bdf8;">↗</span>
+                </button>
+                <button class="hub-btn" onclick="openSidePopup('https://gall.dcinside.com/board/lists/?id=bjwstreet', 'dc_all')">
+                    <span>🪟 골목식당 갤러리 전체글 실시간</span>
+                    <span style="color:#38bdf8;">↗</span>
+                </button>
+            </div>
+
+            <!-- [5] 골목식당 갤러리 개념글 (하단 2칸) -->
+            <div class="card" style="grid-column: span 2;">
+                <h2>
+                    <span id="dcHeaderTitle">🦅 골목식당 갤러리 개념글 (실시간 파묘 50선)</span>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <span id="dcNewCountBadge" style="font-size:0.76em; color:#34d399; font-weight:700;"></span>
+                        <button id="btnShowDeleted" class="kw-mgr-btn" style="color:#fb7185; border-color:rgba(244,63,94,0.5);" onclick="togglePanel('dcDeletedPanel')">🚨 천안문·삭제 관리 (0)</button>
+                    </div>
+                </h2>
+
+                <div id="dcDeletedPanel" class="kw-manager-panel" style="display:none; border-color:rgba(244,63,94,0.45);">
+                    <div class="kw-sec-title" style="color:#fb7185;">
+                        <span>🚨 천안문·삭제 개별 관리함 (1·2P 동시 대조 · 원문확인 후 박제확정/제외 선택)</span>
+                        <div style="display:flex; gap:5px; flex-wrap:wrap;">
+                            <button class="kw-add-btn" style="font-size:0.72em; padding:3px 8px; background:#0284c7; border-color:#0369a1;" onclick="pruneAliveFromDeletedLog()">🧹 생존글 정리</button>
+                            <button class="kw-add-btn" style="font-size:0.72em; padding:3px 8px; background:#334155;" onclick="clearUnconfirmedDeleted()">🧹 미확정 비우기</button>
+                            <button class="kw-add-btn" style="font-size:0.72em; padding:3px 8px; background:#881337; border-color:#be123c;" onclick="clearDeletedHistory()">🗑️ 전체 초기화</button>
+                        </div>
+                    </div>
+                    <ul id="dcDeletedList" class="scroll-list" style="max-height:240px; font-size:0.88em;"></ul>
+                </div>
+
+                <ul id="dcPostList" class="scroll-list dc-grid-2col" style="max-height: 600px;">
+                    {dc_html}
+                </ul>
+            </div>
         </div>
     </div>
 
@@ -1408,6 +1687,7 @@ def generate_html_string():
         const DC_PAGE2_META = {dc_page2_json};
         const SEED_DELETED_CANDIDATES = {seed_deleted_json};
 
+        // 기존 마스터 키 100% 유지 (박제 기록·수동 분류 보존)
         const NEWS_STORAGE_KEY = 'theborn_news_kw_master';
         const RADAR_STORAGE_KEY = 'theborn_radar_kw_master';
         const MANUAL_NEWS_CAT_KEY = 'theborn_manual_news_cat_master';
@@ -1428,6 +1708,7 @@ def generate_html_string():
         let learnedTokens = loadStored(LEARNED_TOKENS_KEY, {{}});
         let ignoredDeletedNos = new Set(loadStored(DC_IGNORED_NOS_KEY, []));
 
+        // 흔한 일반어 오학습 자동 정리
         ['분기', '연속', '억원', '만원', '매출', '적자', '영업손실', '적자폭'].forEach(badTk => {{
             if (learnedTokens[badTk]) delete learnedTokens[badTk];
         }});
@@ -1486,9 +1767,9 @@ def generate_html_string():
             const btn = document.getElementById('autoRefreshBtn');
             if (autoRefreshInterval) clearInterval(autoRefreshInterval);
             remainSeconds = 300;
-            btn.style.color = '#00e676';
-            btn.style.borderColor = '#00e676';
-            btn.textContent = `⏱️ 5분 자동갱신: ON (${{formatRemainTime(remainSeconds)}})`;
+            btn.style.color = '#34d399';
+            btn.style.borderColor = '#10b981';
+            btn.textContent = `⏱️ 자동갱신 ON (${{formatRemainTime(remainSeconds)}})`;
 
             autoRefreshInterval = setInterval(() => {{
                 remainSeconds--;
@@ -1496,7 +1777,7 @@ def generate_html_string():
                     clearInterval(autoRefreshInterval);
                     location.reload();
                 }} else {{
-                    btn.textContent = `⏱️ 5분 자동갱신: ON (${{formatRemainTime(remainSeconds)}})`;
+                    btn.textContent = `⏱️ 자동갱신 ON (${{formatRemainTime(remainSeconds)}})`;
                 }}
             }}, 1000);
         }}
@@ -1508,8 +1789,8 @@ def generate_html_string():
                 autoRefreshInterval = null;
             }}
             btn.textContent = '⏱️ 5분 자동갱신: OFF';
-            btn.style.color = '#8b949e';
-            btn.style.borderColor = '#3d4659';
+            btn.style.color = '#94a3b8';
+            btn.style.borderColor = '#323c52';
         }}
 
         function toggleAutoRefresh() {{
@@ -1539,8 +1820,8 @@ def generate_html_string():
             if (prevPrice && prevPrice !== curPrice) {{
                 const diff = curPrice - prevPrice;
                 const sign = diff > 0 ? '+' : '';
-                diffBadge.textContent = `(직전 확인 대비 ${{sign}}${{diff.toLocaleString()}}원)`;
-                diffBadge.style.color = diff > 0 ? '#ff5252' : '#4fc3f7';
+                diffBadge.textContent = `직전 대비 ${{sign}}${{diff.toLocaleString()}}원`;
+                diffBadge.style.color = diff > 0 ? '#fb7185' : '#38bdf8';
             }}
             if (curPrice > 0) localStorage.setItem(LAST_STOCK_PRICE_KEY, String(curPrice));
         }}
@@ -1608,12 +1889,13 @@ def generate_html_string():
                     }} else {{
                         const upDiff = up - (prevMap[no].up || 0);
                         if (upDiff >= 5) {{
-                            li.querySelector('.dc-diff-badge').textContent = `(추천 ▲+${{upDiff}})`;
+                            li.querySelector('.dc-diff-badge').textContent = `▲+${{upDiff}}`;
                         }}
                     }}
                 }}
             }});
 
+            let hasNewUnconfirmed = false;
             if (prevKeys.length >= 15) {{
                 Object.values(prevMap).forEach(oldPost => {{
                     const sNo = String(oldPost.no);
@@ -1626,6 +1908,7 @@ def generate_html_string():
                                 confirmed: false,
                                 detectedAt: new Date().toLocaleTimeString('ko-KR', {{ hour: '2-digit', minute: '2-digit' }})
                             }});
+                            hasNewUnconfirmed = true;
                         }}
                     }}
                 }});
@@ -1640,7 +1923,11 @@ def generate_html_string():
 
             localStorage.setItem(DC_SNAPSHOT_KEY, JSON.stringify(currentMap));
             if (newCount > 0 && newCount < 45) {{
-                document.getElementById('dcNewCountBadge').textContent = `🆕 신규 개념글 ${{newCount}}건`;
+                document.getElementById('dcNewCountBadge').textContent = `🆕 신규 ${{newCount}}건`;
+            }}
+            // 미확인 신규 삭제글이 떴을 때만 관리함을 자동으로 펼쳐 알림
+            if (hasNewUnconfirmed) {{
+                document.getElementById('dcDeletedPanel').style.display = 'block';
             }}
             saveDeletedLog(deletedLog);
         }}
@@ -1649,40 +1936,44 @@ def generate_html_string():
             const btn = document.getElementById('btnShowDeleted');
             const listEl = document.getElementById('dcDeletedList');
             const confirmedCnt = deletedLog.filter(d => d.confirmed).length;
-            btn.textContent = confirmedCnt > 0
-                ? `🚨 천안문·삭제 관리 (${{deletedLog.length}}건 · 📌확정 ${{confirmedCnt}})`
-                : `🚨 천안문·삭제 관리 (${{deletedLog.length}})`;
+            const unconfirmedCnt = deletedLog.length - confirmedCnt;
+
+            if (unconfirmedCnt > 0) {{
+                btn.textContent = `🚨 천안문 관리 (미확인 ${{unconfirmedCnt}} · 📌확정 ${{confirmedCnt}})`;
+            }} else {{
+                btn.textContent = `🚨 천안문·삭제 관리 (📌확정 ${{confirmedCnt}}건)`;
+            }}
 
             if (!deletedLog.length) {{
-                listEl.innerHTML = "<li style='color:#8b949e;'>감지되거나 보관된 게시글이 없습니다. (개념글 우측 [+박제보관]으로 수동 추가 가능)</li>";
+                listEl.innerHTML = "<li style='color:#64748b;'>감지되거나 보관된 게시글이 없습니다. (개념글 우측 [+박제]로 수동 추가 가능)</li>";
                 return;
             }}
 
             listEl.innerHTML = deletedLog.map(d => {{
                 const sNo = String(d.no);
                 const statusBadge = d.confirmed
-                    ? `<span class="n-badge" style="background:#d50000; color:#fff;">📌 천안문 확정</span>`
-                    : `<span class="n-badge badge-risk">🚨 1·2P 동시소멸 (확인대기)</span>`;
-                const confirmBtnLabel = d.confirmed ? '📌 확정해제' : '📌 박제확정';
+                    ? `<span class="n-badge" style="background:#be123c; color:#fff;">📌 천안문 확정</span>`
+                    : `<span class="n-badge badge-risk">🚨 1·2P 소멸 (확인대기)</span>`;
+                const confirmBtnLabel = d.confirmed ? '확정해제' : '📌 박제확정';
                 const confirmBtnStyle = d.confirmed
-                    ? 'background:#374151; color:#d1d5db; border-color:#4b5563;'
-                    : 'background:#991b1b; color:#fff; border-color:#dc2626;';
+                    ? 'background:#334155; color:#cbd5e1; border-color:#475569;'
+                    : 'background:#9f1239; color:#fff; border-color:#e11d48;';
                 const safeLink = d.link || `https://gall.dcinside.com/board/view/?id=bjwstreet&no=${{sNo}}`;
 
                 return `
-                <li style="${{d.confirmed ? 'background:rgba(255,82,82,0.08); padding-left:6px; border-left:3px solid #ff5252;' : ''}}">
+                <li style="${{d.confirmed ? 'background:rgba(244,63,94,0.06); padding-left:8px; border-left:3px solid #f43f5e;' : ''}}">
                     <div class="meta-line" style="justify-content:space-between;">
                         <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                             ${{statusBadge}}
-                            <span>#${{sNo}} | 감지 ${{d.detectedAt || '-'}} | 작성 ${{d.date}} | 조회 ${{d.views}} | <b style="color:#ff5252;">추천 ${{d.up}}</b></span>
+                            <span>#${{sNo}} · 감지 ${{d.detectedAt || '-'}} · 작성 ${{d.date}} · 조회 ${{d.views}} · <b style="color:#fb7185;">추천 ${{d.up}}</b></span>
                         </div>
                         <div style="display:flex; gap:4px;">
-                            <button class="dc-mini-btn" style="color:#4fc3f7; border-color:#0284c7;" onclick="openSidePopup('${{safeLink}}', 'dc_verify')">🔍 원문확인</button>
+                            <button class="dc-mini-btn" style="color:#38bdf8; border-color:#0284c7;" onclick="openSidePopup('${{safeLink}}', 'dc_verify')">🔍 확인</button>
                             <button class="dc-mini-btn" style="${{confirmBtnStyle}}" onclick="toggleConfirmDeletedPost('${{sNo}}')">${{confirmBtnLabel}}</button>
-                            <button class="dc-mini-btn" style="color:#ff5252;" onclick="removeSingleDeletedPost('${{sNo}}')">✕ 제외</button>
+                            <button class="dc-mini-btn" style="color:#fb7185;" onclick="removeSingleDeletedPost('${{sNo}}')">✕</button>
                         </div>
                     </div>
-                    <a href="${{safeLink}}" target="_blank">🗑️ ${{d.title}}</a>
+                    <a class="post-title" href="${{safeLink}}" target="_blank">🗑️ ${{d.title}}</a>
                 </li>
                 `;
             }}).join('');
@@ -1829,7 +2120,7 @@ def generate_html_string():
                 const isActive = activeKeywordFilter.toLowerCase() === kw.toLowerCase();
                 return `<span class="kw-badge ${{isBoost ? 'boosted' : ''}} ${{isActive ? 'active-filter' : ''}}" onclick="toggleRadarFilter('${{kw}}')">
                     #${{kw}} <b>${{cnt}}</b>
-                    <span class="kw-ban-x" title="'${{kw}}' 키워드를 레이더에서 즉시 제외" onclick="event.stopPropagation(); banRadarWord('${{kw}}')">×</span>
+                    <span class="kw-ban-x" title="'${{kw}}' 제외" onclick="event.stopPropagation(); banRadarWord('${{kw}}')">×</span>
                 </span>`;
             }}).join('');
         }}
@@ -1864,7 +2155,7 @@ def generate_html_string():
 
             const dcHeader = document.getElementById('dcHeaderTitle');
             if (qLow) {{
-                dcHeader.textContent = `🦅 골목식당 갤러리 개념글 (🔍 '${{activeKeywordFilter}}' 검색결과 ${{dcVisibleCount}}건 / 총 ${{dcItems.length}}선)`;
+                dcHeader.textContent = `🦅 골목식당 갤러리 개념글 (🔍 '${{activeKeywordFilter}}' ${{dcVisibleCount}}건 / 총 ${{dcItems.length}}선)`;
             }} else {{
                 dcHeader.textContent = `🦅 골목식당 갤러리 개념글 (실시간 파묘 ${{dcItems.length}}선)`;
             }}
@@ -1987,12 +2278,12 @@ def generate_html_string():
             const learnedEntries = Object.entries(learnedTokens);
             const learnedBox = document.getElementById('tagsLearned');
             if (!learnedEntries.length) {{
-                learnedBox.innerHTML = "<span style='font-size:0.75em; color:#8b949e;'>아직 수동 분류로 학습된 단어가 없습니다. (기사 배지 클릭 시 자동 학습)</span>";
+                learnedBox.innerHTML = "<span style='font-size:0.75em; color:#64748b;'>아직 수동 분류로 학습된 단어가 없습니다.</span>";
             }} else {{
                 learnedBox.innerHTML = learnedEntries.map(([tk, info]) => {{
                     const cls = info.cat === 'RISK' ? 'badge-risk' : (info.cat === 'PR' ? 'badge-pr' : 'badge-gen');
                     const prefix = info.cat === 'RISK' ? '🚨' : (info.cat === 'PR' ? '🎺' : '📰');
-                    return `<span class="kw-edit-tag ${{cls}}" title="클릭하여 학습 단어 삭제" onclick="removeLearnedToken('${{tk}}')">${{prefix}} ${{tk}} ×</span>`;
+                    return `<span class="kw-edit-tag ${{cls}}" title="클릭하여 삭제" onclick="removeLearnedToken('${{tk}}')">${{prefix}} ${{tk}} ×</span>`;
                 }}).join('');
             }}
         }}
@@ -2028,7 +2319,7 @@ def generate_html_string():
         function cycleNewsManualCat(badgeEl) {{
             const li = badgeEl.closest('.news-item');
             const key = li.getAttribute('data-key');
-            const titleText = li.querySelector('a')?.innerText || '';
+            const titleText = li.querySelector('.news-title')?.innerText || '';
             const curManual = manualNewsCats[key];
 
             let nextCat = null;
@@ -2057,7 +2348,7 @@ def generate_html_string():
         function restoreAutoNewsCat(btnEl) {{
             const li = btnEl.closest('.news-item');
             const key = li.getAttribute('data-key');
-            const titleText = li.querySelector('a')?.innerText || '';
+            const titleText = li.querySelector('.news-title')?.innerText || '';
             delete manualNewsCats[key];
             unlearnFromTitle(titleText);
             localStorage.setItem(MANUAL_NEWS_CAT_KEY, JSON.stringify(manualNewsCats));
@@ -2065,34 +2356,34 @@ def generate_html_string():
         }}
 
         const JS_HARD_RISK = [
-            [/믿었는데|떠나가자|다\s*떠나|등\s*돌린|곡소리|비명|외면|눈물/, '가맹점주 이탈·원성'],
-            [/가맹.*해지|폐업|폐점|문\s*닫|철수|퇴출|순감소|50곳\s*순감|꺾였다|급감|해지.*급증|가맹점\s*이탈|점주\s*이탈|매출\s*위축|가맹사업.*흔들/, '가맹해지·매출 위축'],
-            [/적자\s*수렁|반토막|적자\s*전환|무색|3분기도\s*적자|연속\s*적자.*폭락|주가.*폭락|신저가|국내는.*휘청|국내.*휘청|부진의\s*수렁/, '실적 악화·적자 수렁'],
-            [/유출|침해|해킹|KISA|개인정보|계좌정보|보안\s*논란|수탁사/, '개인정보·보안 사고'],
-            [/무더기\s*고소|수백명\s*고소|쪼개기|합의금\s*장사|종토방.*고소|변호사\s*일침|처벌\s*우려|처벌대상|소송\s*위험|무혐의|청구포기|패소|피고소/, '고소 남발·법적 분쟁'],
-            [/위생|원산지|꼼수|책임\s*회피|외주\s*탓|갑질|공정위|국감|불똥|경영\s*부담.*가중|끊이지\s*않는\s*악재|0원\s*쿠폰.*논란/, '경영 논란·오너리스크']
+            [/믿었는데|떠나가자|다\\s*떠나|등\\s*돌린|곡소리|비명|외면|눈물/, '가맹점주 이탈·원성'],
+            [/가맹.*해지|폐업|폐점|문\\s*닫|철수|퇴출|순감소|50곳\\s*순감|꺾였다|급감|해지.*급증|가맹점\\s*이탈|점주\\s*이탈|매출\\s*위축|가맹사업.*흔들/, '가맹해지·매출 위축'],
+            [/적자\\s*수렁|반토막|적자\\s*전환|무색|3분기도\\s*적자|연속\\s*적자.*폭락|주가.*폭락|신저가|국내는.*휘청|국내.*휘청|부진의\\s*수렁/, '실적 악화·적자 수렁'],
+            [/유출|침해|해킹|KISA|개인정보|계좌정보|보안\\s*논란|수탁사/, '개인정보·보안 사고'],
+            [/무더기\\s*고소|수백명\\s*고소|쪼개기|합의금\\s*장사|종토방.*고소|변호사\\s*일침|처벌\\s*우려|처벌대상|소송\\s*위험|무혐의|청구포기|패소|피고소/, '고소 남발·법적 분쟁'],
+            [/위생|원산지|꼼수|책임\\s*회피|외주\\s*탓|갑질|공정위|국감|불똥|경영\\s*부담.*가중|끊이지\\s*않는\\s*악재|0원\\s*쿠폰.*논란/, '경영 논란·오너리스크']
         ];
 
         const JS_SPIN_PR = [
-            [/오너\s*리스크\s*해소|리스크.*완화|백종원\s*일냈다|반등\s*열쇠\s*될까/, '오너리스크 해소·반등 억빠'],
-            [/(적자|영업손실|영업적자|손실).*(줄었다|줄였다|줄여|감소|축소|개선|원가\s*잡았다)/, '적자 축소 물타기'],
+            [/오너\\s*리스크\\s*해소|리스크.*완화|백종원\\s*일냈다|반등\\s*열쇠\\s*될까/, '오너리스크 해소·반등 억빠'],
+            [/(적자|영업손실|영업적자|손실).*(줄었다|줄였다|줄여|감소|축소|개선|원가\\s*잡았다)/, '적자 축소 물타기'],
             [/(줄었다|줄였다|줄여|감소|축소|개선).*(적자|영업손실|영업적자|손실)/, '적자 축소 물타기']
         ];
 
         const JS_STANDARD_PR = [
-            [/흑백요리사|흑백요리사3|안성재.*심사위원|심사위원.*계속|녹화\s*완료|우승자.*확정|해외\s*시장.*노린다/, '흑백요리사·해외 확장 홍보'],
-            [/중국.*매장.*확대|상하이|하루\s*1000잔|불티|무섭게\s*팔린다|中\s*진출|영토\s*확장|아망추.*인기|출점\s*가속|대박\s*조짐|추가\s*출점|더\s*낸다|연착륙/, '중국 빽다방 홍보'],
-            [/우녹스|이탈리아\s*오븐|맛\s*표준화|파트너십|맞손|업무협약|MOU|협약|협력|공동\s*개발|데이터화|탑재|오븐\s*시장|유럽.*투트랙|꺼낸\s*승부수|배달전문점\s*실험/, '해외·신사업 홍보'],
-            [/피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\s*배달|하루\s*배달|일일\s*라이더|치즈킥|소방서/, '유튜브 배달쇼 홍보'],
+            [/흑백요리사|흑백요리사3|안성재.*심사위원|심사위원.*계속|녹화\\s*완료|우승자.*확정|해외\\s*시장.*노린다/, '흑백요리사·해외 확장 홍보'],
+            [/중국.*매장.*확대|상하이|하루\\s*1000잔|불티|무섭게\\s*팔린다|中\\s*진출|영토\\s*확장|아망추.*인기|출점\\s*가속|대박\\s*조짐|추가\\s*출점|더\\s*낸다|연착륙/, '중국 빽다방 홍보'],
+            [/우녹스|이탈리아\\s*오븐|맛\\s*표준화|파트너십|맞손|업무협약|MOU|협약|협력|공동\\s*개발|데이터화|탑재|오븐\\s*시장|유럽.*투트랙|꺼낸\\s*승부수|배달전문점\\s*실험/, '해외·신사업 홍보'],
+            [/피자.*(배달|알바|라이더|오토바이|직접|시켰더니|시키셨|선물|홍보|나서|변신)|일일\\s*배달|하루\\s*배달|일일\\s*라이더|치즈킥|소방서/, '유튜브 배달쇼 홍보'],
             [/소유진|아트하우스|대저택|미술관|내조|애셋맘/, '오너 일가 화제성 언플'],
-            [/통영\s*굴|통영굴짬뽕|팔도\s*짬뽕|신제품|신메뉴|출시|선보|프로모션|할인|특가|이벤트|나눔점|기부|체험행사/, '신메뉴·이벤트 홍보'],
-            [/\[똑똑한|\[유통가|\[푸드|브리핑|단신|꽂힌\s*소스시장|성장동력\s*확보/, '보도자료·업계 홍보']
+            [/통영\\s*굴|통영굴짬뽕|팔도\\s*짬뽕|신제품|신메뉴|출시|선보|프로모션|할인|특가|이벤트|나눔점|기부|체험행사/, '신메뉴·이벤트 홍보'],
+            [/\\[똑똑한|\\[유통가|\\[푸드|브리핑|단신|꽂힌\\s*소스시장|성장동력\\s*확보/, '보도자료·업계 홍보']
         ];
 
-        function classifySingleTitleV17(rawTitle, totalCnt, newsKey) {{
+        function classifySingleTitleV18(rawTitle, totalCnt, newsKey) {{
             if (manualNewsCats[newsKey]) {{
                 const mCat = manualNewsCats[newsKey];
-                const mLabels = {{ 'RISK': '🚨 수동지정: 리스크', 'PR': '🎺 수동지정: 언플', 'GEN': '📰 수동지정: 일반' }};
+                const mLabels = {{ 'RISK': '🚨 수동: 리스크', 'PR': '🎺 수동: 언플', 'GEN': '📰 수동: 일반' }};
                 return [mCat, mLabels[mCat], true];
             }}
             for (const [reg, reason] of JS_HARD_RISK) {{
@@ -2112,9 +2403,9 @@ def generate_html_string():
             }}
             for (const [tk, info] of Object.entries(learnedTokens)) {{
                 if (rawTitle.includes(tk)) {{
-                    if (info.cat === 'RISK') return ['RISK', `🚨 학습판독: 리스크 (${{tk}})`, false];
-                    if (info.cat === 'PR') return ['PR', `🎺 학습판독: 언플 (${{tk}})`, false];
-                    if (info.cat === 'GEN') return ['GEN', `📰 학습판독: 일반 (${{tk}})`, false];
+                    if (info.cat === 'RISK') return ['RISK', `🚨 학습: 리스크 (${{tk}})`, false];
+                    if (info.cat === 'PR') return ['PR', `🎺 학습: 언플 (${{tk}})`, false];
+                    if (info.cat === 'GEN') return ['GEN', `📰 학습: 일반 (${{tk}})`, false];
                 }}
             }}
             const safeTitleForKw = rawTitle.replace(/이탈리아/g, '이태리');
@@ -2148,9 +2439,12 @@ def generate_html_string():
                     return;
                 }}
 
-                const [cat, label, isManual] = classifySingleTitleV17(rawTitle, totalCnt, newsKey);
+                const [cat, label, isManual] = classifySingleTitleV18(rawTitle, totalCnt, newsKey);
 
                 li.setAttribute('data-cat', cat);
+                li.classList.remove('accent-risk', 'accent-pr', 'accent-gen');
+                li.classList.add(cat === 'RISK' ? 'accent-risk' : (cat === 'PR' ? 'accent-pr' : 'accent-gen'));
+
                 const badgeEl = li.querySelector('.n-badge');
                 if (badgeEl) {{
                     badgeEl.className = 'n-badge ' + (cat === 'RISK' ? 'badge-risk' : (cat === 'PR' ? 'badge-pr' : 'badge-gen'));
@@ -2248,11 +2542,11 @@ class handler(BaseHTTPRequestHandler):
             html_content = generate_html_string()
             self.wfile.write(html_content.encode('utf-8'))
         except Exception as e:
-            error_msg = f"<html><body style='background:#121212;color:#fff;'><h1>로딩 중 에러 발생</h1><p>{e}</p></body></html>"
+            error_msg = f"<html><body style='background:#0b0e14;color:#fff;padding:24px;'><h1>로딩 중 에러 발생</h1><p>{e}</p></body></html>"
             self.wfile.write(error_msg.encode('utf-8'))
 
 if __name__ == "__main__":
     html_out = generate_html_string()
     with open("theborn_dashboard.html", "w", encoding="utf-8") as f:
         f.write(html_out)
-    print("✅ theborn_dashboard.html V17 업데이트 완료!")
+    print("✅ theborn_dashboard.html V18 업데이트 완료!")
